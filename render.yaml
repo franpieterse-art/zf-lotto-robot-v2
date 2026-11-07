@@ -1,0 +1,7 @@
+services:
+  - type: web
+    name: zf-lotto-robot-v2
+    runtime: static
+    buildCommand: echo "Static site ready"
+    staticPublishPath: .
+    autoDeployTrigger: commit
