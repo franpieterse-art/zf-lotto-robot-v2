@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: zf-lotto-robot-v3
+    name: zf-lotto-robot
     runtime: static
     buildCommand: echo "Static site ready"
     staticPublishPath: .

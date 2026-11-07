@@ -1,2 +1,11 @@
-# ZF Lotto Robot V3
-Static site: upload index.html and render.yaml to GitHub root. In Render choose New > Static Site, build command `echo Ready`, publish directory `.`. This build has an embedded, limited historical archive and does NOT automatically fetch arbitrary dates online. To extend date coverage, add verified rows to the `rows` array in index.html. No predictive advantage is claimed.
+# ZF Lotto Robot — corrected flow
+1. Select a historical draw date.
+2. Click PREDICT to lock six numbers calculated only from earlier records.
+3. Click REVEAL REAL NUMBERS to compare against the bundled demo archive.
+4. View matching numbers and match percentage.
+
+## Deploy
+Upload index.html and render.yaml to the root of a GitHub repository. On Render choose **Static Site**, build command `echo Ready`, publish directory `.`.
+
+## Important limitation
+This version does NOT perform a live online search. It has a small, unverified bundled archive for demonstrating the correct workflow. Never describe the archive as verified without independently checking each draw. An online results provider/backend is needed for arbitrary dates. Lottery draws are random and historical analysis cannot guarantee improved accuracy.
