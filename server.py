@@ -7,6 +7,10 @@ from engine import predict, compare, walkforward, coldest_numbers
 app = Flask(__name__, static_folder='.', static_url_path='')
 LOCK = threading.RLock()
 DRAWS = {}
+PLUS_DRAWS = {"plus1": {}, "plus2": {}}
+PLUS_ERRORS = {"plus1": None, "plus2": None}
+PLUS_FETCH = {"plus1": 0, "plus2": 0}
+PLUS_URLS = {"plus1": os.getenv("LOTTO_PLUS1_ARCHIVE_URL", "https://bettip.co.za/api/v1/lotto-plus-1/draws.json"), "plus2": os.getenv("LOTTO_PLUS2_ARCHIVE_URL", "https://bettip.co.za/api/v1/lotto-plus-2/draws.json")}
 SESSIONS = {}
 LAST_FETCH = 0
 LAST_ERROR = None
@@ -47,12 +51,21 @@ def extract_records(payload):
                 if isinstance(val,dict): return extract_records(val)
     raise ValueError('Unknown BetTip archive response shape')
 
-def validate_record(record):
+def game_kind(record):
+    value=str(record.get('game',record.get('game_name',record.get('lottery','lotto')))).lower()
+    value=re.sub(r'[^a-z0-9]+',' ',value).strip()
+    if 'daily' in value or 'powerball' in value: return None
+    if re.search(r'(?:plus|\bpl\b)\s*2\b',value): return 'plus2'
+    if re.search(r'(?:plus|\bpl\b)\s*1\b',value): return 'plus1'
+    if value in ('lotto','sa lotto','south african lotto','national lotto','national lottery lotto'): return 'lotto'
+    return None
+
+def validate_record(record,expected_game='lotto',allow_unlabelled=False):
     if not isinstance(record,dict): raise ValueError('Draw is not an object')
-    # Reject explicitly non-Lotto games, including Lotto Plus and Daily Lotto.
-    game=str(record.get('game',record.get('game_name',record.get('lottery','lotto')))).lower().replace('_',' ').strip()
-    if game not in ('lotto','sa lotto','south african lotto','national lotto','national lottery lotto'):
-        return None
+    kind=game_kind(record)
+    if allow_unlabelled and kind=='lotto' and not any(k in record for k in ('game','game_name','lottery')):
+        kind=expected_game
+    if kind!=expected_game:return None
     day=normalized_date(record.get('date',record.get('draw_date',record.get('drawDate'))))
     nums=sorted(parse_numbers(record))
     if len(nums)!=6 or len(set(nums))!=6 or not all(1<=n<=52 for n in nums):
@@ -61,7 +74,7 @@ def validate_record(record):
     if max(nums)>52: raise ValueError('Out-of-range draw')
     return day,nums
 
-def parse_archive(raw,content_type=''):
+def parse_archive(raw,content_type='',expected_game='lotto',allow_unlabelled=False):
     text=raw.decode('utf-8-sig') if isinstance(raw,bytes) else raw
     if 'csv' in content_type or text.lstrip().lower().startswith('date,'):
         records=list(csv.DictReader(io.StringIO(text)))
@@ -71,7 +84,7 @@ def parse_archive(raw,content_type=''):
     out={}; bad=0
     for rec in records:
         try:
-            item=validate_record(rec)
+            item=validate_record(rec,expected_game,allow_unlabelled)
             if not item: continue
             day,nums=item
             if day in out and out[day]!=nums: raise ValueError('Conflicting results on '+day)
@@ -89,8 +102,18 @@ def load_local():
         global SOURCE
         SOURCE='Local verified CSV (user supplied)'
 
+def load_plus_local():
+    for kind,filename in [('plus1','draws_plus1.csv'),('plus2','draws_plus2.csv')]:
+        if not os.path.isfile(filename):continue
+        try:
+            with open(filename,'rb') as f:
+                rows,_=parse_archive(f.read(),'text/csv',kind,True)
+            with LOCK: PLUS_DRAWS[kind].update(rows)
+        except Exception as exc: PLUS_ERRORS[kind]='Local archive: '+str(exc)
+
 try: load_local()
 except Exception as exc: LAST_ERROR='Local archive: '+str(exc)
+load_plus_local()
 
 def refresh(force=False):
     global LAST_FETCH,LAST_ERROR,SOURCE
@@ -114,6 +137,26 @@ def refresh(force=False):
     except Exception as exc:
         with LOCK: LAST_ERROR=f'{type(exc).__name__}: {str(exc)[:250]}'
 
+def refresh_plus(kind,force=False):
+    with LOCK:
+        if not force and PLUS_FETCH[kind] and time.time()-PLUS_FETCH[kind]<TTL:return
+        PLUS_FETCH[kind]=time.time()
+    try:
+        url=PLUS_URLS[kind]
+        if not url.startswith('https://'):raise ValueError('Archive URL must use HTTPS')
+        response=requests.get(url,headers={'Accept':'application/json,text/csv','User-Agent':'ZF-Lotto-Robot/9.0'},timeout=(7,18))
+        response.raise_for_status()
+        if len(response.content)>12_000_000:raise ValueError('Archive exceeds 12MB limit')
+        rows,_=parse_archive(response.content,response.headers.get('Content-Type',''),kind,True)
+        with LOCK:
+            for day,nums in rows.items():
+                if day in PLUS_DRAWS[kind] and PLUS_DRAWS[kind][day]!=nums:
+                    raise ValueError('Conflicting '+kind+' result on '+day)
+            PLUS_DRAWS[kind].update(rows)
+            PLUS_ERRORS[kind]=None
+    except Exception as exc:
+        with LOCK:PLUS_ERRORS[kind]=f'{type(exc).__name__}: {str(exc)[:250]}'
+
 def snapshot():
     with LOCK: return [{'date':d,'numbers':nums} for d,nums in sorted(DRAWS.items())]
 
@@ -124,12 +167,13 @@ def home(): return send_from_directory('.','index.html')
 def status():
     refresh()
     ds=snapshot()
-    with LOCK: err=LAST_ERROR; src=SOURCE; last=LAST_FETCH
-    return jsonify(draws=len(ds),first=ds[0]['date'] if ds else None,last=ds[-1]['date'] if ds else None,provider='BetTip',online_provider_configured=True,source=src,fetch_error=err,cache_age_seconds=round(time.time()-last) if last else None)
+    with LOCK: err=LAST_ERROR; src=SOURCE; last=LAST_FETCH; plus_counts={k:len(v) for k,v in PLUS_DRAWS.items()}; plus_errors=dict(PLUS_ERRORS)
+    return jsonify(draws=len(ds),first=ds[0]['date'] if ds else None,last=ds[-1]['date'] if ds else None,provider='BetTip',online_provider_configured=True,source=src,fetch_error=err,cache_age_seconds=round(time.time()-last) if last else None,plus_draws=plus_counts,plus_errors=plus_errors)
 
 @app.post('/api/refresh')
 def refresh_endpoint():
     refresh(force=True)
+    for kind in PLUS_DRAWS:refresh_plus(kind,force=True)
     return status()
 
 @app.post('/api/import')
@@ -137,12 +181,15 @@ def import_csv():
     f=request.files.get('file')
     if not f: return jsonify(error='CSV required'),400
     try:
-        rows,_=parse_archive(f.read(),'text/csv')
+        kind=request.form.get('game','lotto')
+        if kind not in ('lotto','plus1','plus2'):raise ValueError('Unknown game')
+        rows,_=parse_archive(f.read(),'text/csv',kind,kind!='lotto')
+        target=DRAWS if kind=='lotto' else PLUS_DRAWS[kind]
         with LOCK:
             for d,nums in rows.items():
-                if d in DRAWS and DRAWS[d]!=nums: raise ValueError('Conflicting result: '+d)
-            DRAWS.update(rows)
-        return jsonify(imported=len(rows),total=len(DRAWS))
+                if d in target and target[d]!=nums: raise ValueError('Conflicting result: '+d)
+            target.update(rows)
+        return jsonify(imported=len(rows),total=len(target),game=kind)
     except Exception as e:return jsonify(error=str(e)),400
 
 @app.post('/api/predict')
@@ -172,8 +219,15 @@ def reveal():
     if actual is None:
         refresh(force=True)
         with LOCK: actual=DRAWS.get(day)
-    if actual is None:return jsonify(error='No verified winning result found for this date. It may be a non-draw date or the archive is incomplete. No result was invented.'),404
-    return jsonify(date=day,actual=actual,source=SOURCE or 'Historical archive',comparison=compare(sess['rows'],actual))
+    # Each game is independent. Never substitute the main draw for Plus results.
+    for kind in ('plus1','plus2'):
+        with LOCK:missing=day not in PLUS_DRAWS[kind]
+        if missing:refresh_plus(kind)
+    with LOCK:
+        results={'lotto':DRAWS.get(day),'plus1':PLUS_DRAWS['plus1'].get(day),'plus2':PLUS_DRAWS['plus2'].get(day)}
+        errors=dict(PLUS_ERRORS)
+    comparisons={kind:compare(sess['rows'],nums) if nums is not None else None for kind,nums in results.items()}
+    return jsonify(date=day,actual=results['lotto'],source=SOURCE or 'Historical archive',comparison=comparisons['lotto'],results=results,comparisons=comparisons,plus_errors=errors)
 
 @app.post('/api/backtest')
 def backtest():
