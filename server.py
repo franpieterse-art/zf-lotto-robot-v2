@@ -268,7 +268,7 @@ def prediction():
     with LOCK:
         if len(SESSIONS)>1000: SESSIONS.pop(next(iter(SESSIONS)))
         SESSIONS[token]={'date':day,'rows':rows}
-    return jsonify(token=token,date=day,rows=rows,training_draws=len(history),excluded_cold_numbers=coldest_numbers(history))
+    return jsonify(token=token,date=day,rows=rows,training_draws=len(history),excluded_cold_numbers=coldest_numbers(history, count=10))
 
 @app.post('/api/reveal')
 def reveal():

@@ -50,7 +50,7 @@ def score_sets(history):
     ensemble={n:sum(s[n] for s in normalized)/4 for n in fs}
     return [frequency,gap,pair_score,ml,ensemble],pair
 
-def coldest_numbers(history, count=5):
+def coldest_numbers(history, count=10):
     # Use ONLY draws strictly preceding the target, in the same 6/52 dataset.
     # Lowest total frequency = coldest; ties use longer absence, then number.
     if not history:
@@ -62,7 +62,7 @@ def coldest_numbers(history, count=5):
 
 def predict(history, target, salt='0'):
     if len(history)<25:raise ValueError('At least 25 earlier verified draws are needed to predict.')
-    excluded=set(coldest_numbers(history))
+    excluded=set(coldest_numbers(history, count=10))
     sets,pairs=score_sets(history)
     out=[]
     for idx, scores in enumerate(sets):
