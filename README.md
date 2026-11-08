@@ -1,12 +1,10 @@
-# ZF Lotto Robot V11 — three results auto-download fix
+# ZF Lotto Robot V12 — exclude five hottest, include ten coldest
 
-V9 attempted unverified BetTip Plus 1/Plus 2 URLs and displayed unavailable results. V10 adds a combined-archive HTML downloader for all three games from https://lottology.com/south-africa-lotto/draws . The combined archive contains columns `draws`, `plus_1` and `plus_2`. A strict parser matches dates and columns, validates each six-number draw, and refuses conflicting results. BetTip is retained as a fallback. No API key is required for the HTML archive.
+The previous V11 exclusion of **10 coldest** numbers is removed entirely. All 52 numbers are evaluated for frequency, and the **five most frequently drawn** numbers across the available verified Main LOTTO draws strictly before the selected prediction date are excluded from all five prediction rows. Thus 47 numbers remain eligible, including all ten numbers formerly classified as coldest unless they independently rank among the five hottest under the new rule.
 
-**Important:** Source accessibility from Render is not verified; the page may block automated requests or change structure. The combined archive was observed to be behind the latest draw; it is not guaranteed current. The archive contains older 6/58 results, so V10 only imports dates from 2026-06-04 onward into the current 6/52 prediction engine. The user can upload verified CSVs for missing dates. Future data is never included in the training subset for a selected historical date. The ten cold-number exclusions and five strategies remain.
+Ties are broken by most recent appearance, then lowest number. The five excluded numbers are displayed on the Predictions screen. All five prediction strategies, date-based Predict → Reveal → Compare for Main Lotto, Lotto Plus 1 and Lotto Plus 2, and chronological backtesting remain. Each historical test recomputes its hot-number exclusion using earlier draws only.
 
-Deploy six files to GitHub root, build `pip install -r requirements.txt`, start `gunicorn server:app --bind 0.0.0.0:$PORT --timeout 120`.
+**Note:** No mathematical advantage is established by excluding frequently drawn numbers. Independent fair draws have no memory.
 
-## V11 change: ten coldest numbers excluded
-For every prediction date, rank all 52 numbers by their total appearances across all available verified **Main Lotto** draws strictly before that date. Exclude the 10 least frequent numbers from **all five** predicted rows. Ties are resolved by longest absence, then smallest number. This leaves 42 eligible numbers. Walk-forward backtesting applies the same date-specific rule without future data. Reveal still compares all five rows with Main Lotto, Plus 1, and Plus 2 where verified results are available.
-
-**Statistical caution:** In a fair lottery, cold numbers are not less likely to occur next. This filter does not improve the theoretical odds of a specific six-number combination.
+## Deploy
+Upload the six files to the root of the existing GitHub repository and commit. Render build: `pip install -r requirements.txt`. Render start: `gunicorn server:app --bind 0.0.0.0:$PORT --timeout 120`. The external historical data sources inherited from V11 remain unverified on Render; missing results are never fabricated.

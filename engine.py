@@ -50,19 +50,22 @@ def score_sets(history):
     ensemble={n:sum(s[n] for s in normalized)/4 for n in fs}
     return [frequency,gap,pair_score,ml,ensemble],pair
 
-def coldest_numbers(history, count=10):
-    # Use ONLY draws strictly preceding the target, in the same 6/52 dataset.
-    # Lowest total frequency = coldest; ties use longer absence, then number.
+def hottest_numbers(history, count=5):
+    """Highest historical frequency, ties: most recently seen, then lowest number.
+
+    Only pass verified Main Lotto draws strictly earlier than prediction date.
+    """
     if not history:
-        raise ValueError('No earlier historical draws to calculate cold numbers.')
+        raise ValueError('No earlier historical draws to calculate hot numbers.')
     counts=Counter(n for d in history for n in d['numbers'])
     gaps={n:next((i for i,d in enumerate(reversed(history)) if n in d['numbers']),len(history))
           for n in range(1,N+1)}
-    return sorted(range(1,N+1),key=lambda n:(counts[n],-gaps[n],n))[:count]
+    return sorted(range(1,N+1), key=lambda n:(-counts[n],gaps[n],n))[:count]
+
 
 def predict(history, target, salt='0'):
     if len(history)<25:raise ValueError('At least 25 earlier verified draws are needed to predict.')
-    excluded=set(coldest_numbers(history, count=10))
+    excluded=set(hottest_numbers(history, count=5))
     sets,pairs=score_sets(history)
     out=[]
     for idx, scores in enumerate(sets):

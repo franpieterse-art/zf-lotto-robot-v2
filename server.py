@@ -2,7 +2,7 @@ import csv, io, os, re, time, secrets, threading
 from datetime import date, datetime
 from flask import Flask, request, jsonify, send_from_directory
 import requests
-from engine import predict, compare, walkforward, coldest_numbers
+from engine import predict, compare, walkforward, hottest_numbers
 
 app = Flask(__name__, static_folder='.', static_url_path='')
 LOCK = threading.RLock()
@@ -268,7 +268,7 @@ def prediction():
     with LOCK:
         if len(SESSIONS)>1000: SESSIONS.pop(next(iter(SESSIONS)))
         SESSIONS[token]={'date':day,'rows':rows}
-    return jsonify(token=token,date=day,rows=rows,training_draws=len(history),excluded_cold_numbers=coldest_numbers(history, count=10))
+    return jsonify(token=token,date=day,rows=rows,training_draws=len(history),excluded_hot_numbers=hottest_numbers(history, count=5))
 
 @app.post('/api/reveal')
 def reveal():
