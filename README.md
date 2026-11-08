@@ -7,3 +7,5 @@ All eligible numbers remain available, with no hottest/coldest exclusions. Five 
 Deploy to Render: build `pip install -r requirements.txt`, start `gunicorn server:app --bind 0.0.0.0:$PORT --timeout 120`.
 
 The formula is experimental and does not improve the mathematical odds of a fair lottery. Verify historical archives and game rule changes before drawing conclusions.
+
+V31 FIX: repaired fatal JavaScript syntax error in Predict click handler (unterminated string). Browser now loads handlers. No formula changes.
