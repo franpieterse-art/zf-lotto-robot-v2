@@ -63,15 +63,33 @@ def hottest_numbers(history, count=5, ball_max=N):
     return sorted(range(1,ball_max+1), key=lambda n:(-counts[n],gaps[n],n))[:count]
 
 
+def adaptive_window_scores(history, ball_max=N):
+    """Select lookback by walk-forward validation strictly before target."""
+    windows=(10,25,50,100,200)
+    nvalid=min(24,max(0,len(history)-25))
+    scores={}
+    for window in windows:
+        hits=0
+        for i in range(len(history)-nvalid,len(history)):
+            past=history[:i]
+            counts=Counter(n for d in past[-window:] for n in d['numbers'])
+            ranked=sorted((n for n in range(1,ball_max+1)),key=lambda n:(-counts[n],n))[:6]
+            hits+=len(set(ranked)&set(history[i]['numbers']))
+        scores[window]=hits/max(1,nvalid)
+    best=max(windows,key=lambda w:(scores[w],w))
+    counts=Counter(n for d in history[-best:] for n in d['numbers'])
+    return {n:counts[n]/max(1,min(best,len(history))) for n in range(1,ball_max+1)},best,scores
+
 def predict(history, target, salt='0', ball_max=N):
     if len(history)<25:raise ValueError('At least 25 earlier verified draws are needed to predict.')
-    excluded=set(hottest_numbers(history, count=5, ball_max=ball_max))
     sets,pairs=score_sets(history,ball_max)
+    adaptive,_,_=adaptive_window_scores(history,ball_max)
+    sets[4]=adaptive
     out=[]
     for idx, scores in enumerate(sets):
         rng=random.Random(seed_for(target,idx,salt)); chosen=[]
         for _ in range(6):
-            options=[n for n in range(1,ball_max+1) if n not in chosen and n not in excluded]
+            options=[n for n in range(1,ball_max+1) if n not in chosen]
             vals=[]
             for n in options:
                 pbonus=sum(pairs.get(tuple(sorted((n,x))),0) for x in chosen)
@@ -103,5 +121,5 @@ def walkforward(draws,start=None,end=None,limit=200,era_fn=None):
     summary=[]
     for j in range(5):
         counts=[r['rows'][j]['count'] for r in results]
-        summary.append({'strategy':['Frequency / recency','Hot / cold + gaps','Pairs / triplets','Online machine learning','Ensemble'][j], 'mean_matches':round(sum(counts)/len(counts),3) if counts else None,'three_plus':sum(c>=3 for c in counts),'four_plus':sum(c>=4 for c in counts),'histogram':{str(k):counts.count(k) for k in range(7)}})
+        summary.append({'strategy':['Frequency / recency','Hot / cold + gaps','Pairs / triplets','Online machine learning','Adaptive rolling-window (V16)'][j], 'mean_matches':round(sum(counts)/len(counts),3) if counts else None,'three_plus':sum(c>=3 for c in counts),'four_plus':sum(c>=4 for c in counts),'histogram':{str(k):counts.count(k) for k in range(7)}})
     return {'tested':len(results),'summary':summary,'results':results}

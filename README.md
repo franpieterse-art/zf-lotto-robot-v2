@@ -1,40 +1,9 @@
-# ZF Lotto Robot V13 — Historical archive and persistence upgrade
+# ZF Lotto Robot V17 — All Numbers Allowed
 
-Keeps the V12 five-strategy predictions, exclusion of the five historically hottest numbers, blind Predict → Reveal → Compare for three games, and chronological walk-forward backtests.
+Based on the V16 adaptive prediction package. **No hot or cold numbers are excluded.** Every number from 1 through the selected date’s configured valid ball maximum is eligible in all five prediction rows. The adaptive window validation also evaluates all eligible numbers without exclusion.
 
-## Improvements
-- SQLite result cache, deduplication and conflict rejection by game/date.
-- Loads cached results before fetching online; CSV imports are also cached.
-- BetTip JSON/CSV and Lottology HTML fallback inherited from V12 (availability and endpoint format **not verified**).
-- Optional paginated JSON/CSV archive downloads configured by URL templates; stops on errors and never invents results.
-- Data coverage endpoint `/api/data-health` and CSV backups `/api/export/lotto`, `/api/export/plus1`, `/api/export/plus2`.
-- CSV import supports `date,n1,n2,n3,n4,n5,n6`; rejects invalid rows and conflicts.
-- Historical draws before 2026-06-04 excluded because the robot's current engine is for 6/52 only. Older draws require separate ruleset-specific modelling; the app cannot legitimately promise 5–10 years of comparable 6/52 results.
+Preserved: five strategies, adaptive fifth row, date selection, Predict → Reveal → Compare for Main LOTTO, LOTTO PLUS 1, LOTTO PLUS 2, historical CSV import and cache, and walk-forward backtesting. Predictions use only historical draws earlier than the selected date.
 
-## Run
-`pip install -r requirements.txt` then `python server.py`. For Render use included `render.yaml`.
+To deploy, upload all eight files to the existing GitHub repository root. Render build: `pip install -r requirements.txt`; start: `gunicorn server:app --bind 0.0.0.0:$PORT --timeout 120`.
 
-## Data persistence on Render
-Default database is `lotto_history.sqlite3` in the working directory. **Render free filesystem is ephemeral**; downloaded/imported data may disappear after restart or deployment. For a paid persistent disk mounted at `/var/data`, set `LOTTO_DB_PATH=/var/data/lotto_history.sqlite3`. Otherwise export the CSVs after importing and commit them to the GitHub repo as `draws.csv`, `draws_plus1.csv`, and `draws_plus2.csv` for repeatable deploys.
-
-## Optional paginated source
-Set `LOTTO_LOTTO_PAGED_URL`, `LOTTO_PLUS1_PAGED_URL`, `LOTTO_PLUS2_PAGED_URL` to **real verified HTTPS URL templates** containing `{page}`, for example `https://example.org/archive?page={page}` (example only, not a real provider). Set `LOTTO_ARCHIVE_MAX_PAGES` (default 30, maximum 500). On Retry Historical Download, the server visits each page and imports compatible JSON or CSV. Do not use this option until an actual working endpoint is confirmed.
-
-## Limits
-Source results are third-party, not automatically official-verified. Imported numbers are checked for format and conflicts, not independently verified against the lottery operator. Missing data remains missing. No number-frequency strategy improves the theoretical odds of an individual ticket in a fair lottery.
-
-## V14 repairs
-- Combined archive accepts partial game coverage instead of rejecting the entire source if a Plus game is absent.
-- Historical date parser supports written month names as well as ISO and slash-separated dates.
-- Data status reads cached data without initiating a network request; Retry Historical Download explicitly triggers source refresh.
-- Prediction errors show exactly how many earlier main-game draws are present for the selected date.
-- Data coverage diagnostics include per-provider errors; CSV uploads have a 5 MB cap.
-- Reveal distinguishes missing archive data from the possibility that a game was not held.
-
-**Important:** This release does not establish that the configured third-party API endpoints work or provide a complete historical dataset. No results are fabricated. 6/52-era results are kept separate from earlier rule sets. Render's free ephemeral filesystem is not permanent: use CSV exports or a persistent disk.
-
-
-## V15 user-provided historical CSV
-Bundled `za_lotto.csv`: 1,230 Main LOTTO rows (2015-01-03 through 2026-10-24). Automatically imported at startup and cached in SQLite. This is user-supplied, not independently verified. No PLUS data is in this file.
-
-Training and walk-forward backtests only use draws strictly before the target date and within conservative, **provisional** number-range eras: 2015–2016 6/49, 2017–2024 6/52, 2025 onward 6/58. Verify precise rule-change dates with official records before relying on results near transitions. The app does not claim predictive advantage over random lottery draws.
+No statistical method is known to improve jackpot odds for a fair lottery. Live API/data integrity not verified.

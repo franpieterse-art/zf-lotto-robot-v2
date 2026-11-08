@@ -3,7 +3,7 @@ from datetime import date, datetime
 from flask import Flask, request, jsonify, send_from_directory
 import requests
 import storage
-from engine import predict, compare, walkforward, hottest_numbers
+from engine import predict, compare, walkforward, hottest_numbers, adaptive_window_scores
 
 app = Flask(__name__, static_folder='.', static_url_path='')
 LOCK = threading.RLock()
@@ -263,8 +263,8 @@ def training_era(day):
     # Conservative year-based splits: do not mix 6/49, 6/52, and 6/58 datasets.
     # Boundaries must be confirmed against official rules before treating backtests as definitive.
     if day < '2017-01-01': return ('2015-01-01','2017-01-01',49)
-    if day < '2025-01-01': return ('2017-01-01','2025-01-01',52)
-    return ('2025-01-01','9999-12-31',58)
+    if day < '2026-06-01': return ('2017-01-01','2026-06-01',58)
+    return ('2026-06-01','9999-12-31',52)
 
 def training_history(day):
     start,end,ball_max=training_era(day)
@@ -280,7 +280,7 @@ def home(): return send_from_directory('.','index.html')
 def status():
     ds=snapshot()
     with LOCK: err=LAST_ERROR; src=SOURCE; last=LAST_FETCH; plus_counts={k:len(v) for k,v in PLUS_DRAWS.items()}; plus_errors=dict(PLUS_ERRORS)
-    return jsonify(combined_error=COMBINED_ERROR,combined_source=COMBINED_SOURCE,draws=len(ds),first=ds[0]['date'] if ds else None,last=ds[-1]['date'] if ds else None,provider='BetTip',online_provider_configured=True,source=src,fetch_error=err,cache_age_seconds=round(time.time()-last) if last else None,plus_draws=plus_counts,plus_errors=plus_errors,database=storage.DB,persistent_disk_configured=storage.DB.startswith('/var/data/'),historical_rules='Historical eras are separated into provisional 6/49 (2015–16), 6/52 (2017–24), and 6/58 (2025 onward) groups; confirm exact official transition dates.')
+    return jsonify(combined_error=COMBINED_ERROR,combined_source=COMBINED_SOURCE,draws=len(ds),first=ds[0]['date'] if ds else None,last=ds[-1]['date'] if ds else None,provider='BetTip',online_provider_configured=True,source=src,fetch_error=err,cache_age_seconds=round(time.time()-last) if last else None,plus_draws=plus_counts,plus_errors=plus_errors,database=storage.DB,persistent_disk_configured=storage.DB.startswith('/var/data/'),historical_rules='Provisional historical eras; current 6/52 begins June 2026. Verify historical rule dates.')
 
 @app.post('/api/refresh')
 def refresh_endpoint():
@@ -348,7 +348,8 @@ def prediction():
     with LOCK:
         if len(SESSIONS)>1000: SESSIONS.pop(next(iter(SESSIONS)))
         SESSIONS[token]={'date':day,'rows':rows}
-    return jsonify(token=token,date=day,rows=rows,training_draws=len(history),excluded_hot_numbers=hottest_numbers(history, count=5, ball_max=training_era(day)[2]))
+    _,best_window,validation=adaptive_window_scores(history,training_era(day)[2])
+    return jsonify(token=token,date=day,rows=rows,training_draws=len(history),all_numbers_allowed=True,adaptive_window=best_window,adaptive_validation=validation)
 
 @app.post('/api/reveal')
 def reveal():
