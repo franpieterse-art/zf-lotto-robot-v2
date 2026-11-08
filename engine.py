@@ -150,72 +150,63 @@ def selected_model_scores(history, ball_max=N):
     return [scores[j] for j in selected],selected,dict(validation),window
 
 
-# V28 eight-factor research score. All eligible numbers remain available.
-V28_WEIGHTS={'frequency':.20,'momentum':.15,'gap':.15,'recency':.15,'pairing':.10,'cycle':.10,'trend':.10,'backtest':.05}
+# V30: fast, six-factor experimental score. All eligible numbers remain in the pool.
+# No score is a calibrated winning probability.
+V29_WEIGHTS={'long_frequency':.20,'recent_frequency':.20,'momentum':.15,'gap':.10,'pairing':.15,'stability':.20}
 
-def v28_scores(history,ball_max=N):
+def v29_scores(history,ball_max=N):
     from itertools import combinations
-    pool=list(range(1,ball_max+1))
-    # Normalize each draw by its own eligible range when older lottery rules differ.
-    # This avoids treating numbers that did not exist in an old format as cold.
-    draws=[set(d['numbers']) for d in history]
-    dates=[d['date'] for d in history]
-    L=len(draws)
-    count=lambda w:Counter(n for d in draws[-w:] for n in d if n<=ball_max)
-    c10,c30,c80,c200=count(10),count(30),count(80),count(200)
-    allc=count(L)
-    def rate(c,w,n):return c[n]/max(1,min(L,w))
-    frequency={n:(allc[n]+3)/(L+ball_max/2) for n in pool}
-    momentum={n:rate(c10,10,n)-rate(c80,80,n) for n in pool}
-    gaps={n:next((i for i,d in enumerate(reversed(draws)) if n in d),L) for n in pool}
-    # Gap is descriptive, not evidence a number is 'due'.
-    gap={n:min(gaps[n],100)/100 for n in pool}
-    recency={n:sum((.985**i) for i,d in enumerate(reversed(draws)) if n in d) for n in pool}
+    pool=range(1,ball_max+1)
+    # Historical draws are chronological and strictly earlier than the target.
+    # Only count a ball on dates when it was eligible under the historical format.
+    all_counts=Counter(); eligible=Counter()
+    for d in history:
+        balls=set(d['numbers'])
+        observed_max=max(balls) if balls else 0
+        # Conservative historic range approximation; avoids penalizing 50+ in 6/49 era.
+        year=int(d['date'][:4]); historical_max=49 if year<2017 else (58 if d['date']<'2026-06-01' else 52)
+        for n in pool:
+            if n<=historical_max:eligible[n]+=1
+        all_counts.update(n for n in balls if n<=ball_max)
+    recent=Counter(n for d in history[-30:] for n in d['numbers'] if n<=ball_max)
+    medium=Counter(n for d in history[-100:] for n in d['numbers'] if n<=ball_max)
     pair=Counter()
-    for d in draws[-150:]:
-        for a,b in combinations(sorted(d.intersection(pool)),2):pair[a,b]+=1
-    pairing={n:sum(v for (a,b),v in pair.items() if n in (a,b)) for n in pool}
-    # Compare observed gaps to typical past gaps, using only completed draws.
-    cycle={}
-    for n in pool:
-        positions=[i for i,d in enumerate(draws) if n in d]
-        intervals=[b-a for a,b in zip(positions,positions[1:])]
-        avg=sum(intervals)/len(intervals) if intervals else max(1,L/6)
-        cycle[n]=-abs(gaps[n]-avg)/max(1,avg)
-    trend={n:rate(c10,10,n)*.5+rate(c30,30,n)*.3-rate(c200,200,n)*.8 for n in pool}
-    # Backtest signal: short-window hit rate assessed on completed prior draws only.
-    # Keep bounded to 12 validation draws; never see the target draw.
-    bt=Counter(); valid=0
-    for i in range(max(12,L-12),L):
-        prior=draws[:i]; prior_c=Counter(x for d in prior[-30:] for x in d)
-        top=set(sorted(pool,key=lambda n:(-prior_c[n],n))[:6]); valid+=1
-        for n in top.intersection(draws[i]):bt[n]+=1
-    backtest={n:(bt[n]+1)/(valid+2) for n in pool}
-    factors={'frequency':frequency,'momentum':momentum,'gap':gap,'recency':recency,'pairing':pairing,'cycle':cycle,'trend':trend,'backtest':backtest}
-    z={name:normalized(values) for name,values in factors.items()}
-    score={n:sum(weight*z[name][n] for name,weight in V28_WEIGHTS.items()) for n in pool}
-    return score,factors
+    for d in history[-100:]:
+        for a,b in combinations(sorted(n for n in d['numbers'] if n<=ball_max),2):
+            pair[a]+=1;pair[b]+=1
+    last_seen={n:len(history) for n in pool}
+    for gap,d in enumerate(reversed(history)):
+        for n in d['numbers']:
+            if n in last_seen and last_seen[n]==len(history):last_seen[n]=gap
+    factors={
+      'long_frequency':{n:(all_counts[n]+2)/(eligible[n]+2*ball_max/6) for n in pool},
+      'recent_frequency':{n:(recent[n]+1)/(min(30,len(history))+ball_max/6) for n in pool},
+      'momentum':{n:recent[n]/max(1,min(30,len(history)))-medium[n]/max(1,min(100,len(history))) for n in pool},
+      'gap':{n:min(last_seen[n],60)/60 for n in pool},
+      'pairing':{n:pair[n]/max(1,min(100,len(history))) for n in pool},
+      'stability':{n:-(abs(recent[n]/max(1,min(30,len(history)))-all_counts[n]/max(1,eligible[n]))) for n in pool},
+    }
+    z={k:normalized(v) for k,v in factors.items()}
+    return {n:sum(w*z[k][n] for k,w in V29_WEIGHTS.items()) for n in pool}
 
 def predict(history,target,salt='0',ball_max=N):
-    if len(history)<12:raise ValueError('At least 12 earlier Main LOTTO draws are needed.')
-    score,_=v28_scores(history,ball_max)
+    if len(history)<12:raise ValueError('At least 12 earlier Main LOTTO draws are required.')
+    scores=v29_scores(history,ball_max)
     rows=[]
     for idx in range(5):
-        rng=random.Random(seed_for(target,'v28-'+str(idx),salt))
-        chosen=[]
+        rng=random.Random(seed_for(target,'v30-'+str(idx),salt))
+        options=list(range(1,ball_max+1));chosen=[]
+        temperature=(1.4,1.0,.7,.45,.25)[idx]
         for _ in range(6):
-            options=[n for n in range(1,ball_max+1) if n not in chosen]
-            # Different temperatures give diverse rows while retaining every eligible ball.
-            temperature=[1.8,1.2,.8,.5,.25][idx]
-            high=max(score[n] for n in options)
-            weights=[math.exp(max(-20,min(20,(score[n]-high)*temperature))) for n in options]
-            chosen.append(rng.choices(options,weights=weights,k=1)[0])
+            peak=max(scores[n] for n in options)
+            weights=[math.exp(max(-20,(scores[n]-peak)*temperature)) for n in options]
+            pick=rng.choices(options,weights=weights,k=1)[0]
+            chosen.append(pick);options.remove(pick)
         row=sorted(chosen)
         if row in rows:
-            # Deterministically resample to guarantee five distinct combinations.
-            for attempt in range(1,100):
-                alternate=sorted(rng.sample(range(1,ball_max+1),6))
-                if alternate not in rows:row=alternate;break
+            for _ in range(100):
+                row=sorted(rng.sample(range(1,ball_max+1),6))
+                if row not in rows:break
         rows.append(row)
     return rows
 
@@ -223,20 +214,19 @@ def compare(rows,actual):
     actual=set(actual)
     return [{'numbers':row,'matched':sorted(actual.intersection(row)),'count':len(actual.intersection(row)),'percentage':round(len(actual.intersection(row))*100/6,2)} for row in rows]
 
-def walkforward(draws,start=None,end=None,limit=200,era_fn=None):
+def walkforward(draws,start=None,end=None,limit=100,era_fn=None):
+    # Most recent test draws first to keep backtesting relevant and bounded.
+    targets=[d for d in draws if (not start or d['date']>=start) and (not end or d['date']<=end)]
+    targets=targets[-limit:]
     results=[]
-    for target in draws:
-        day=target['date']
-        if start and day<start:continue
-        if end and day>end:continue
-        ball_max=era_fn(day)[2] if era_fn else N
-        history=[d for d in draws if d['date']<day]
+    for target in targets:
+        day=target['date'];history=[d for d in draws if d['date']<day]
         if len(history)<12:continue
+        ball_max=era_fn(day)[2] if era_fn else N
         rows=predict(history,day,ball_max=ball_max)
         results.append({'date':day,'actual':target['numbers'],'rows':compare(rows,target['numbers']),'training_draws':len(history),'number_range':ball_max})
-        if len(results)>=limit:break
     summary=[]
     for j in range(5):
         counts=[r['rows'][j]['count'] for r in results]
-        summary.append({'strategy':'V28 formula row '+str(j+1),'mean_matches':round(sum(counts)/len(counts),3) if counts else None,'three_plus':sum(c>=3 for c in counts),'four_plus':sum(c>=4 for c in counts),'histogram':{str(k):counts.count(k) for k in range(7)}})
+        summary.append({'strategy':'V30 formula row '+str(j+1),'mean_matches':round(sum(counts)/len(counts),3) if counts else None,'three_plus':sum(c>=3 for c in counts),'four_plus':sum(c>=4 for c in counts),'histogram':{str(k):counts.count(k) for k in range(7)}})
     return {'tested':len(results),'summary':summary,'results':results}

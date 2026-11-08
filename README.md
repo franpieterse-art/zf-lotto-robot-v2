@@ -1,13 +1,9 @@
-# ZF Lotto Robot V28 — Eight-factor formula, all numbers allowed
+# ZF Lotto Robot V30 — six-factor formula integrated
 
-Five unique prediction rows. All eligible numbers are included (no hot/cold exclusions).
+Formula: S(n) = 0.20 LongFrequency + 0.20 RecentFrequency + 0.15 Momentum + 0.10 Gap + 0.15 Pairing + 0.20 TrendStability. Components are min-max normalized to a 0–1 scale.
 
-Formula: S(n) = .20 Frequency + .15 Momentum + .15 Gap + .15 Recency + .10 Pairing + .10 Cycle + .10 Trend + .05 Backtest. Each factor is standardized before weighting.
+All eligible numbers remain available, with no hottest/coldest exclusions. Five unique rows are generated using historical Main Lotto draws strictly before the selected date. Predict, Reveal, Compare and walk-forward Backtest remain available. Local historical CSV files are bundled. Results from different games are stored separately; missing results are not invented.
 
-Predict and backtest use **all locally available Main LOTTO draws strictly before the chosen date**, never future draws. Reveal compares separately with locally stored LOTTO / PLUS 1 / PLUS 2 or 5 MAX where available. Draw format boundaries are provisional and should be verified. Historical data may be incomplete.
+Deploy to Render: build `pip install -r requirements.txt`, start `gunicorn server:app --bind 0.0.0.0:$PORT --timeout 120`.
 
-Install: pip install -r requirements.txt
-Run: gunicorn server:app --bind 0.0.0.0:$PORT --timeout 120
-Deploy: extract ZIP and upload all files to GitHub, commit, redeploy Render.
-
-This formula is experimental. Fair lottery draws are independent; historical patterns do not improve theoretical winning odds.
+The formula is experimental and does not improve the mathematical odds of a fair lottery. Verify historical archives and game rule changes before drawing conclusions.
