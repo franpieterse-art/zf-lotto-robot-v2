@@ -1,18 +1,7 @@
-# ZF Lotto Robot V9 — triple draw comparison
+# ZF Lotto Robot V10 — three results auto-download fix
 
-V9 keeps V8 five coldest-number exclusions and five prediction strategies, and compares each of the five rows to three independent draw results: Main Lotto, Lotto Plus 1, Lotto Plus 2. Click Predict first, then Reveal. A missing result is shown as unavailable, not invented.
+V9 attempted unverified BetTip Plus 1/Plus 2 URLs and displayed unavailable results. V10 adds a combined-archive HTML downloader for all three games from https://lottology.com/south-africa-lotto/draws . The combined archive contains columns `draws`, `plus_1` and `plus_2`. A strict parser matches dates and columns, validates each six-number draw, and refuses conflicting results. BetTip is retained as a fallback. No API key is required for the HTML archive.
 
-## Historical data
+**Important:** Source accessibility from Render is not verified; the page may block automated requests or change structure. The combined archive was observed to be behind the latest draw; it is not guaranteed current. The archive contains older 6/58 results, so V10 only imports dates from 2026-06-04 onward into the current 6/52 prediction engine. The user can upload verified CSVs for missing dates. Future data is never included in the training subset for a selected historical date. The five cold-number exclusions and five strategies remain.
 
-Main Lotto prediction training uses **only Main Lotto results strictly earlier than the chosen date**. Plus 1/2 are comparison-only and are not used to train predictions or calculate the five coldest numbers.
-
-The application attempts three BetTip endpoints. **The Plus endpoint paths are unverified and may not exist.** If downloads fail, supply verified `draws.csv`, `draws_plus1.csv`, and `draws_plus2.csv` in the GitHub repository, or import via the UI game selector. CSV columns: `date,n1,n2,n3,n4,n5,n6`. Each date must be checked against an authoritative source. Optional env vars: `LOTTO_ARCHIVE_URL`, `LOTTO_PLUS1_ARCHIVE_URL`, `LOTTO_PLUS2_ARCHIVE_URL`.
-
-## Render
-
-Build: `pip install -r requirements.txt`
-Start: `gunicorn server:app --bind 0.0.0.0:$PORT --timeout 120`
-
-## Limitations
-
-A fair Lotto draw is random. Excluding cold numbers does not improve mathematical odds. Live API availability is unverified. Main game backtesting is retained from V8; Plus comparisons are shown in Reveal, not included in the aggregate backtest summary.
+Deploy six files to GitHub root, build `pip install -r requirements.txt`, start `gunicorn server:app --bind 0.0.0.0:$PORT --timeout 120`.

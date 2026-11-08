@@ -137,6 +137,66 @@ def refresh(force=False):
     except Exception as exc:
         with LOCK: LAST_ERROR=f'{type(exc).__name__}: {str(exc)[:250]}'
 
+# Secondary source: publicly viewable archive listing all three games in one table.
+# HTML is parsed by column heading, never by arbitrary numbers on a page.
+LOTTLOGY_URL=os.getenv('LOTTO_COMBINED_ARCHIVE_URL','https://lottology.com/south-africa-lotto/draws')
+COMBINED_FETCH=0
+COMBINED_ERROR=None
+COMBINED_SOURCE=None
+
+def parse_combined_archive(html):
+    from bs4 import BeautifulSoup
+    soup=BeautifulSoup(html,'html.parser')
+    found={'lotto':{},'plus1':{},'plus2':{}}
+    for table in soup.find_all('table'):
+        trs=table.find_all('tr')
+        if not trs:continue
+        heads=[re.sub(r'[^a-z0-9]+','_',c.get_text(' ',strip=True).lower()).strip('_') for c in trs[0].find_all(['th','td'])]
+        needed={'date','draws','plus_1','plus_2'}
+        if not needed.issubset(set(heads)):continue
+        ix={h:i for i,h in enumerate(heads)}
+        for tr in trs[1:]:
+            cells=tr.find_all(['th','td'])
+            if len(cells)<len(heads):continue
+            try:
+                day=datetime.strptime(cells[ix['date']].get_text(' ',strip=True),'%d %b %Y').date().isoformat()
+            except ValueError:continue
+            # 6/52 rules started in June 2026; do not mix older 6/58 draws.
+            if day<'2026-06-04':continue
+            for game,column in [('lotto','draws'),('plus1','plus_1'),('plus2','plus_2')]:
+                vals=[int(n) for n in re.findall(r'\b\d{1,2}\b',cells[ix[column]].get_text(' ',strip=True))]
+                if len(vals)==6 and len(set(vals))==6 and all(1<=n<=52 for n in vals):
+                    found[game][day]=sorted(vals)
+        if any(found.values()):break
+    if not found['lotto'] or not found['plus1'] or not found['plus2']:
+        raise ValueError('Combined archive table missing or has no valid 6/52 results')
+    return found
+
+def refresh_combined(force=False):
+    global COMBINED_FETCH,COMBINED_ERROR,COMBINED_SOURCE,SOURCE
+    with LOCK:
+        if not force and COMBINED_FETCH and time.time()-COMBINED_FETCH<TTL:return
+        COMBINED_FETCH=time.time()
+    try:
+        if not LOTTLOGY_URL.startswith('https://'):raise ValueError('HTTPS required')
+        response=requests.get(LOTTLOGY_URL,headers={'User-Agent':'Mozilla/5.0 (compatible; ZF-Lotto/10)'},timeout=(7,18))
+        response.raise_for_status()
+        if len(response.content)>6_000_000:raise ValueError('HTML archive too large')
+        found=parse_combined_archive(response.text)
+        with LOCK:
+            for game,store in [('lotto',DRAWS),('plus1',PLUS_DRAWS['plus1']),('plus2',PLUS_DRAWS['plus2'])]:
+                for day,nums in found[game].items():
+                    if day in store and store[day]!=nums:
+                        raise ValueError('Conflicting verified result for '+game+' '+day)
+            DRAWS.update(found['lotto'])
+            PLUS_DRAWS['plus1'].update(found['plus1'])
+            PLUS_DRAWS['plus2'].update(found['plus2'])
+            COMBINED_ERROR=None
+            COMBINED_SOURCE='Lottology combined archive (independent third party)'
+            if not SOURCE:SOURCE=COMBINED_SOURCE
+    except Exception as exc:
+        with LOCK:COMBINED_ERROR=f'{type(exc).__name__}: {str(exc)[:220]}'
+
 def refresh_plus(kind,force=False):
     with LOCK:
         if not force and PLUS_FETCH[kind] and time.time()-PLUS_FETCH[kind]<TTL:return
@@ -165,13 +225,14 @@ def home(): return send_from_directory('.','index.html')
 
 @app.get('/api/status')
 def status():
-    refresh()
+    refresh_combined()
     ds=snapshot()
     with LOCK: err=LAST_ERROR; src=SOURCE; last=LAST_FETCH; plus_counts={k:len(v) for k,v in PLUS_DRAWS.items()}; plus_errors=dict(PLUS_ERRORS)
-    return jsonify(draws=len(ds),first=ds[0]['date'] if ds else None,last=ds[-1]['date'] if ds else None,provider='BetTip',online_provider_configured=True,source=src,fetch_error=err,cache_age_seconds=round(time.time()-last) if last else None,plus_draws=plus_counts,plus_errors=plus_errors)
+    return jsonify(combined_error=COMBINED_ERROR,combined_source=COMBINED_SOURCE,draws=len(ds),first=ds[0]['date'] if ds else None,last=ds[-1]['date'] if ds else None,provider='BetTip',online_provider_configured=True,source=src,fetch_error=err,cache_age_seconds=round(time.time()-last) if last else None,plus_draws=plus_counts,plus_errors=plus_errors)
 
 @app.post('/api/refresh')
 def refresh_endpoint():
+    refresh_combined(force=True)
     refresh(force=True)
     for kind in PLUS_DRAWS:refresh_plus(kind,force=True)
     return status()
@@ -198,7 +259,7 @@ def prediction():
     try: date.fromisoformat(day)
     except (ValueError,TypeError):return jsonify(error='Choose a valid date'),400
     if day>=date.today().isoformat():return jsonify(error='Choose a previous draw date'),400
-    refresh()
+    refresh_combined()
     history=[d for d in snapshot() if d['date']<day]
     try: rows=predict(history,day,str(p.get('reset',0)))
     except ValueError as exc:
@@ -219,6 +280,7 @@ def reveal():
     if actual is None:
         refresh(force=True)
         with LOCK: actual=DRAWS.get(day)
+    refresh_combined()
     # Each game is independent. Never substitute the main draw for Plus results.
     for kind in ('plus1','plus2'):
         with LOCK:missing=day not in PLUS_DRAWS[kind]
@@ -234,7 +296,7 @@ def backtest():
     p=request.get_json(silent=True) or {}
     try: limit=max(1,min(500,int(p.get('limit',100))))
     except (ValueError,TypeError):return jsonify(error='Invalid limit'),400
-    refresh()
+    refresh_combined()
     # The engine trains on only prior draws. Data must be checked for completeness.
     return jsonify(walkforward(snapshot(),p.get('start'),p.get('end'),limit))
 
