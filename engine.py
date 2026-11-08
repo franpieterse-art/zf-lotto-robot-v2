@@ -202,10 +202,10 @@ def predict(history,target,salt='0',ball_max=N):
     if len(history)<12:raise ValueError('At least 12 earlier Main LOTTO draws are required.')
     scores=v33_scores(history,ball_max)
     rows=[];usage=Counter()
-    for idx in range(5):
-        rng=random.Random(seed_for(target,'v33-'+str(idx),salt))
+    for idx in range(10):
+        rng=random.Random(seed_for(target,'v34-'+str(idx),salt))
         options=list(range(1,ball_max+1));chosen=[]
-        temperature=(1.3,1.05,.85,.65,.5)[idx]
+        temperature=(1.3,1.2,1.1,1.05,.95,.85,.75,.65,.55,.5)[idx]
         for _ in range(6):
             peak=max(scores[n]-0.45*usage[n] for n in options)
             weights=[math.exp(max(-20,(scores[n]-0.45*usage[n]-peak)*temperature)) for n in options]
@@ -235,7 +235,7 @@ def walkforward(draws,start=None,end=None,limit=100,era_fn=None):
         rows=predict(history,day,ball_max=ball_max)
         results.append({'date':day,'actual':target['numbers'],'rows':compare(rows,target['numbers']),'training_draws':len(history),'number_range':ball_max})
     summary=[]
-    for j in range(5):
+    for j in range(10):
         counts=[r['rows'][j]['count'] for r in results]
-        summary.append({'strategy':'V32 formula row '+str(j+1),'mean_matches':round(sum(counts)/len(counts),3) if counts else None,'three_plus':sum(c>=3 for c in counts),'four_plus':sum(c>=4 for c in counts),'histogram':{str(k):counts.count(k) for k in range(7)}})
+        summary.append({'strategy':'V34 formula row '+str(j+1),'mean_matches':round(sum(counts)/len(counts),3) if counts else None,'three_plus':sum(c>=3 for c in counts),'four_plus':sum(c>=4 for c in counts),'histogram':{str(k):counts.count(k) for k in range(7)}})
     return {'tested':len(results),'summary':summary,'results':results}
