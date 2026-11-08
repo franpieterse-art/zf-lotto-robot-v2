@@ -3,7 +3,7 @@ from datetime import date, datetime
 from flask import Flask, request, jsonify, send_from_directory
 import requests
 import storage
-from engine import predict, compare, walkforward, hottest_numbers, adaptive_window_scores, selected_model_scores
+from engine import predict, compare, walkforward, hottest_numbers, adaptive_window_scores, v28_scores
 
 app = Flask(__name__, static_folder='.', static_url_path='')
 LOCK = threading.RLock()
@@ -393,7 +393,8 @@ def prediction():
         if len(SESSIONS)>1000: SESSIONS.pop(next(iter(SESSIONS)))
         SESSIONS[token]={'date':day,'rows':rows}
     _,best_window,validation=adaptive_window_scores(history,training_era(day)[2])
-    _,models,model_validation,_=selected_model_scores(history,training_era(day)[2])
+    _,factors=v28_scores(history,training_era(day)[2])
+    models=list(range(5)); model_validation={"formula_weights":{"frequency":20,"momentum":15,"gap":15,"recency":15,"pairing":10,"cycle":10,"trend":10,"backtest":5}}
     return jsonify(token=token,date=day,rows=rows,training_draws=len(history),all_numbers_allowed=True,eligible_numbers=list(range(1,training_era(day)[2]+1)),adaptive_window=best_window,adaptive_validation=validation,selected_models=models,model_validation=model_validation,limited_history=len(history)<25)
 
 @app.post('/api/reveal')
