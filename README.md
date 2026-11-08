@@ -22,3 +22,13 @@ Set `LOTTO_LOTTO_PAGED_URL`, `LOTTO_PLUS1_PAGED_URL`, `LOTTO_PLUS2_PAGED_URL` to
 
 ## Limits
 Source results are third-party, not automatically official-verified. Imported numbers are checked for format and conflicts, not independently verified against the lottery operator. Missing data remains missing. No number-frequency strategy improves the theoretical odds of an individual ticket in a fair lottery.
+
+## V14 repairs
+- Combined archive accepts partial game coverage instead of rejecting the entire source if a Plus game is absent.
+- Historical date parser supports written month names as well as ISO and slash-separated dates.
+- Data status reads cached data without initiating a network request; Retry Historical Download explicitly triggers source refresh.
+- Prediction errors show exactly how many earlier main-game draws are present for the selected date.
+- Data coverage diagnostics include per-provider errors; CSV uploads have a 5 MB cap.
+- Reveal distinguishes missing archive data from the possibility that a game was not held.
+
+**Important:** This release does not establish that the configured third-party API endpoints work or provide a complete historical dataset. No results are fabricated. 6/52-era results are kept separate from earlier rule sets. Render's free ephemeral filesystem is not permanent: use CSV exports or a persistent disk.

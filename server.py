@@ -22,14 +22,14 @@ BETTIP_URL = os.getenv('LOTTO_ARCHIVE_URL', 'https://bettip.co.za/api/v1/lotto/d
 
 def normalized_date(raw):
     s = str(raw or '').strip()
-    for fmt in ('%Y-%m-%d','%Y/%m/%d','%d/%m/%Y','%d-%m-%Y'):
-        try: return datetime.strptime(s[:10],fmt).date().isoformat()
+    for fmt in ('%Y-%m-%d','%Y/%m/%d','%d/%m/%Y','%d-%m-%Y','%d %b %Y','%d %B %Y'):
+        try: return datetime.strptime(s if '%b' in fmt or '%B' in fmt else s[:10],fmt).date().isoformat()
         except ValueError: pass
     raise ValueError('Unrecognized draw date: '+s[:30])
 
 def parse_numbers(record):
     if isinstance(record,dict):
-        for key in ('numbers','winning_numbers','winningNumbers','main_numbers','mainNumbers','balls','results'):
+        for key in ('numbers','winning_numbers','winningNumbers','main_numbers','mainNumbers','balls','results','winningNumbersMain'):
             if key in record:
                 val=record[key]
                 if isinstance(val,dict): val=val.get('main',val.get('numbers',[]))
@@ -45,7 +45,7 @@ def parse_numbers(record):
 def extract_records(payload):
     if isinstance(payload,list): return payload
     if isinstance(payload,dict):
-        for key in ('draws','results','data','lotto','items'):
+        for key in ('draws','results','data','lotto','items','history'):
             if key in payload:
                 val=payload[key]
                 if isinstance(val,list): return val
@@ -78,7 +78,7 @@ def validate_record(record,expected_game='lotto',allow_unlabelled=False):
 
 def parse_archive(raw,content_type='',expected_game='lotto',allow_unlabelled=False):
     text=raw.decode('utf-8-sig') if isinstance(raw,bytes) else raw
-    if 'csv' in content_type or text.lstrip().lower().startswith('date,'):
+    if 'csv' in content_type or (text.lstrip().lower().startswith('date,')):
         records=list(csv.DictReader(io.StringIO(text)))
     else:
         import json
@@ -170,7 +170,7 @@ def parse_combined_archive(html):
             cells=tr.find_all(['th','td'])
             if len(cells)<len(heads):continue
             try:
-                day=datetime.strptime(cells[ix['date']].get_text(' ',strip=True),'%d %b %Y').date().isoformat()
+                day=normalized_date(cells[ix['date']].get_text(' ',strip=True))
             except ValueError:continue
             # 6/52 rules started in June 2026; do not mix older 6/58 draws.
             if day<'2026-06-04':continue
@@ -179,7 +179,7 @@ def parse_combined_archive(html):
                 if len(vals)==6 and len(set(vals))==6 and all(1<=n<=52 for n in vals):
                     found[game][day]=sorted(vals)
         if any(found.values()):break
-    if not found['lotto'] or not found['plus1'] or not found['plus2']:
+    if not any(found.values()):
         raise ValueError('Combined archive table missing or has no valid 6/52 results')
     return found
 
@@ -269,7 +269,6 @@ def home(): return send_from_directory('.','index.html')
 
 @app.get('/api/status')
 def status():
-    refresh_combined()
     ds=snapshot()
     with LOCK: err=LAST_ERROR; src=SOURCE; last=LAST_FETCH; plus_counts={k:len(v) for k,v in PLUS_DRAWS.items()}; plus_errors=dict(PLUS_ERRORS)
     return jsonify(combined_error=COMBINED_ERROR,combined_source=COMBINED_SOURCE,draws=len(ds),first=ds[0]['date'] if ds else None,last=ds[-1]['date'] if ds else None,provider='BetTip',online_provider_configured=True,source=src,fetch_error=err,cache_age_seconds=round(time.time()-last) if last else None,plus_draws=plus_counts,plus_errors=plus_errors,database=storage.DB,persistent_disk_configured=storage.DB.startswith('/var/data/'),historical_rules='Predictions use the 6/52 era only; older game formats are not mixed.')
@@ -293,7 +292,7 @@ def data_health():
         report[game]={'count':len(dates),'first':dates[0] if dates else None,'last':dates[-1] if dates else None,
                       'pre_2026_06_04':sum(d<'2026-06-04' for d in dates),
                       'note':'Coverage counts are not proof of completeness or official verification.'}
-    return jsonify(games=report,database=storage.DB,persistence_note='Render free filesystem is ephemeral. Configure a persistent disk or commit exported CSV files.')
+    return jsonify(games=report,source_errors={'combined':COMBINED_ERROR,'main':LAST_ERROR,**PLUS_ERRORS},database=storage.DB,persistence_note='Render free filesystem is ephemeral. Configure a persistent disk or commit exported CSV files.')
 
 @app.get('/api/export/<game>')
 def export_history(game):
@@ -311,7 +310,10 @@ def import_csv():
     try:
         kind=request.form.get('game','lotto')
         if kind not in ('lotto','plus1','plus2'):raise ValueError('Unknown game')
-        rows,_=parse_archive(f.read(),'text/csv',kind,kind!='lotto')
+        if f.content_length and f.content_length>5_000_000: raise ValueError('CSV exceeds 5 MB')
+        content=f.read(5_000_001)
+        if len(content)>5_000_000: raise ValueError('CSV exceeds 5 MB')
+        rows,_=parse_archive(content,'text/csv',kind,kind!='lotto')
         target=DRAWS if kind=='lotto' else PLUS_DRAWS[kind]
         with LOCK:
             for d,nums in rows.items():
@@ -328,6 +330,8 @@ def prediction():
     if day>=date.today().isoformat():return jsonify(error='Choose a previous draw date'),400
     refresh_combined()
     history=[d for d in snapshot() if d['date']<day]
+    if len(history)<25:
+        return jsonify(error=f'Only {len(history)} earlier Main LOTTO draws are stored for {day}; 25 are required. Import older 6/52 results or select a later date. Data coverage is not the same as data completeness.', earlier_draws=len(history),required=25),400
     try: rows=predict(history,day,str(p.get('reset',0)))
     except ValueError as exc:
         return jsonify(error=str(exc)+' Historical archive may be unavailable. Check Data Status.'),400
