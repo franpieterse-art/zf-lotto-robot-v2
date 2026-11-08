@@ -1,10 +1,7 @@
 services:
   - type: web
-    name: zf-lotto-robot
+    name: zf-lotto-robot-v5
     runtime: python
     plan: free
-    buildCommand: "echo Ready"
-    startCommand: "python server.py"
-    envVars:
-      - key: RESULTSZA_API_KEY
-        sync: false
+    buildCommand: pip install -r requirements.txt
+    startCommand: python server.py

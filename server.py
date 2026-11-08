@@ -55,9 +55,25 @@ class Handler(SimpleHTTPRequestHandler):
             for age,r in enumerate(history):
                 for n in r['numbers']:
                     if n in counts:counts[n]+=1.0+0.4/(1+age/15)
-            ranking=sorted(counts,key=lambda n:(-counts[n],hashlib.sha256((s+':'+str(n)).encode()).hexdigest()))
-            nums=sorted(ranking[:6]);token=hashlib.sha256((s+':'+','.join(map(str,nums))).encode()).hexdigest()[:16]
-            return self.reply(200,{'date':s,'numbers':nums,'training_draws':len(history),'latest_training_date':history[0]['date'],'prediction_id':token,'method':'Frequency and recency heuristic; not proven to outperform random selection'})
+            # Generate five distinct 6-number rows; variation changes only with explicit reset.
+            # All scores derive exclusively from dates earlier than the selected draw.
+            nonce=parse_qs(u.query).get('attempt',['0'])[0]
+            if not nonce.isdigit() or len(nonce)>8:raise ValueError('Invalid attempt')
+            rows=[];seen=set();pool=list(counts)
+            for i in range(5):
+                seed=int(hashlib.sha256((s+':'+nonce+':'+str(i)).encode()).hexdigest()[:16],16)
+                rng=random.Random(seed)
+                candidates=[]
+                for n in pool:
+                    # Frequency plus reproducible jitter for five different combinations.
+                    candidates.append((counts[n]+rng.uniform(0,5.5),n))
+                line=sorted(n for _,n in sorted(candidates,reverse=True)[:6])
+                if tuple(line) in seen:
+                    available=[n for n in pool if n not in line]
+                    line=sorted(line[:-1]+[rng.choice(available)])
+                seen.add(tuple(line));rows.append(line)
+            token=hashlib.sha256((s+':'+nonce+':'+repr(rows)).encode()).hexdigest()[:16]
+            return self.reply(200,{'date':s,'rows':rows,'training_draws':len(history),'latest_training_date':history[0]['date'],'prediction_id':token,'method':'Frequency and recency heuristic with randomized variation; not proven to outperform random selection'})
         except ValueError as e:self.reply(400,{'error':str(e)})
         except Exception as e:self.reply(503,{'error':str(e)})
 if __name__=='__main__':
