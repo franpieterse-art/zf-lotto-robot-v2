@@ -9,6 +9,8 @@ app = Flask(__name__, static_folder='.', static_url_path='')
 LOCK = threading.RLock()
 DRAWS = {}
 PLUS_DRAWS = {"plus1": {}, "plus2": {}}
+MAX_DRAWS = {}
+BONUS = {"lotto":{},"plus1":{},"plus2":{},"max5":{}}
 PLUS_ERRORS = {"plus1": None, "plus2": None}
 PLUS_FETCH = {"plus1": 0, "plus2": 0}
 PLUS_URLS = {"plus1": os.getenv("LOTTO_PLUS1_ARCHIVE_URL", "https://bettip.co.za/api/v1/lotto-plus-1/draws.json"), "plus2": os.getenv("LOTTO_PLUS2_ARCHIVE_URL", "https://bettip.co.za/api/v1/lotto-plus-2/draws.json")}
@@ -98,7 +100,9 @@ def load_local():
     if not os.path.isfile(path): return
     with open(path,'rb') as f: rows,_=parse_archive(f.read(),'text/csv')
     with LOCK:
-        storage.save('lotto',rows,'local CSV'); DRAWS.update(rows)
+        DRAWS.update(rows)
+        try: storage.save('lotto',rows,'local CSV')
+        except ValueError: pass  # bundled CSV is authoritative if old SQLite differs
         global SOURCE
         SOURCE='Local verified CSV (user supplied)'
 
@@ -109,8 +113,29 @@ def load_plus_local():
             with open(filename,'rb') as f:
                 rows,_=parse_archive(f.read(),'text/csv',kind,True)
             with LOCK:
-                storage.save(kind,rows,'local CSV'); PLUS_DRAWS[kind].update(rows)
+                PLUS_DRAWS[kind].update(rows)
+                try: storage.save(kind,rows,'local CSV')
+                except ValueError: pass  # preserve user-supplied archive in memory
         except Exception as exc: PLUS_ERRORS[kind]='Local archive: '+str(exc)
+
+def load_max_local():
+    filename='draws_5max.csv'
+    if not os.path.isfile(filename): return
+    with open(filename,'rb') as f: rows,_=parse_archive(f.read(),'text/csv','lotto')
+    with LOCK: MAX_DRAWS.update(rows)
+
+def load_bonuses():
+    for kind,filename in [('lotto','za_lotto.csv'),('plus1','draws_plus1.csv'),('max5','draws_5max.csv')]:
+        if not os.path.isfile(filename): continue
+        with open(filename,encoding='utf-8-sig',newline='') as f:
+            for row in csv.DictReader(f):
+                try:
+                    day=normalized_date(row['date'])
+                    if kind=='lotto' and day not in DRAWS: continue
+                    if kind=='plus1' and day not in PLUS_DRAWS['plus1']: continue
+                    if kind=='max5' and day not in MAX_DRAWS: continue
+                    BONUS[kind][day]=int(row['bonus'])
+                except (ValueError,KeyError,TypeError): pass
 
 # Load cached results before making any external network requests.
 try:
@@ -123,6 +148,8 @@ except Exception as exc: LAST_ERROR='Database: '+str(exc)
 try: load_local()
 except Exception as exc: LAST_ERROR='Local archive: '+str(exc)
 load_plus_local()
+try: load_max_local(); load_bonuses()
+except Exception as exc: LAST_ERROR="Local 5 MAX / bonus: "+str(exc)
 
 def refresh(force=False):
     """Load BetTip's documented mixed South African lottery archive once.
@@ -297,7 +324,7 @@ def home(): return send_from_directory('.','index.html')
 def status():
     ds=snapshot()
     with LOCK: err=LAST_ERROR; src=SOURCE; last=LAST_FETCH; plus_counts={k:len(v) for k,v in PLUS_DRAWS.items()}; plus_errors=dict(PLUS_ERRORS)
-    return jsonify(minimum_training_draws=12,bet_tip_endpoint=BETTIP_URL,bet_tip_last_attempt=LAST_FETCH or None,combined_error=COMBINED_ERROR,combined_source=COMBINED_SOURCE,draws=len(ds),first=ds[0]['date'] if ds else None,last=ds[-1]['date'] if ds else None,provider='BetTip mixed SA archive',online_provider_configured=True,source=src,fetch_error=err,cache_age_seconds=round(time.time()-last) if last else None,plus_draws=plus_counts,plus_errors=plus_errors,database=storage.DB,persistent_disk_configured=storage.DB.startswith('/var/data/'),historical_rules='All stored Main LOTTO draws strictly before the selected date are used. Historical ball ranges may differ; results across rule changes are not directly comparable.')
+    return jsonify(minimum_training_draws=12,bet_tip_endpoint=BETTIP_URL,bet_tip_last_attempt=LAST_FETCH or None,combined_error=COMBINED_ERROR,combined_source=COMBINED_SOURCE,draws=len(ds),first=ds[0]['date'] if ds else None,last=ds[-1]['date'] if ds else None,provider='BetTip mixed SA archive',online_provider_configured=True,source=src,fetch_error=err,cache_age_seconds=round(time.time()-last) if last else None,plus_draws=plus_counts,max5_draws=len(MAX_DRAWS),plus_errors=plus_errors,database=storage.DB,persistent_disk_configured=storage.DB.startswith('/var/data/'),historical_rules='All stored Main LOTTO draws strictly before the selected date are used. Historical ball ranges may differ; results across rule changes are not directly comparable.')
 
 @app.post('/api/refresh')
 def refresh_endpoint():
@@ -384,10 +411,14 @@ def reveal():
         # Missing results remain unavailable until a separate refresh succeeds.
         pass
     with LOCK:
-        results={'lotto':DRAWS.get(day),'plus1':PLUS_DRAWS['plus1'].get(day),'plus2':PLUS_DRAWS['plus2'].get(day)}
+        results={'lotto':DRAWS.get(day),'plus1':PLUS_DRAWS['plus1'].get(day),'plus2':PLUS_DRAWS['plus2'].get(day),'max5':MAX_DRAWS.get(day)}
         errors=dict(PLUS_ERRORS)
     comparisons={kind:compare(sess['rows'],nums) if nums is not None else None for kind,nums in results.items()}
-    return jsonify(date=day,actual=results['lotto'],source=SOURCE or 'Historical archive',comparison=comparisons['lotto'],results=results,comparisons=comparisons,plus_errors=errors)
+    # Display ONE third panel, preserving the true underlying game identity.
+    # Do not relabel 5 MAX results as historical PLUS 2 data.
+    third_key = 'plus2' if results['plus2'] is not None else ('max5' if results['max5'] is not None else 'plus2')
+    return jsonify(date=day,actual=results['lotto'],source=SOURCE or 'Historical archive',comparison=comparisons['lotto'],results=results,comparisons=comparisons,plus_errors=errors,bonuses={k:BONUS[k].get(day) for k in results},third_game=third_key)
+
 
 @app.post('/api/backtest')
 def backtest():

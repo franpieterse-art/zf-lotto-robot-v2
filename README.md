@@ -1,13 +1,14 @@
-# ZF Lotto Robot V22 — Predict Button JavaScript Fix
+# ZF Lotto Robot V24 — Three results panels
 
-Root cause confirmed: V21's `index.html` had a JavaScript **SyntaxError: missing ) after argument list** in the Predict button click handler. Because the browser couldn't parse the script, no button handlers were registered and the page remained on 'Checking locally stored results…'.
+Based on the user-provided V23 package, including its three historical CSV archives.
 
-V22 fixes the missing parenthesis. JavaScript syntax was validated with `node --check`; Python files compiled. It preserves V21's all-previous-Main-Lotto training data, five prediction rows, all numbers eligible, three results panels and Reveal/Backtest/CSV features.
+## Change
+After **Predict → Reveal**, show three panels: **1. Main LOTTO**, **2. LOTTO PLUS 1**, and **3. LOTTO PLUS 2 / LOTTO 5 MAX**. The third panel uses a verified PLUS 2 record for the selected date when available; otherwise it uses a verified 5 MAX record. The heading shows the **actual source game** to avoid falsely presenting a 5 MAX draw as a PLUS 2 draw. If neither is stored, it shows unavailable. The backend continues to store PLUS 2 and 5 MAX independently, and bonus balls are tied to the correct game.
+
+All five prediction rows are compared to each of the three available result panels. The engine still trains only on all earlier Main LOTTO results; all valid numbers are eligible. Prediction and Reveal do not make network calls.
 
 ## Deploy
-Upload all eight ZIP files to the root of your GitHub repository, replace the old versions, commit, and wait for Render Live. Press Ctrl+F5 to bypass cached HTML. No Render command changes required.
+Extract and upload all 10 files to the GitHub repository root, replacing matching files. Render build: `pip install -r requirements.txt`; start: `gunicorn server:app --bind 0.0.0.0:$PORT --timeout 120`. Hard refresh browser with Ctrl+F5.
 
-Build: `pip install -r requirements.txt`
-Start: `gunicorn server:app --bind 0.0.0.0:$PORT --timeout 120`
-
-The historical API availability and live Render deployment are not verified. This is a front-end syntax fix, not a prediction accuracy change.
+## Limitations
+Historical files were supplied by the user, not independently verified against official results. The online archive/API connection is unverified. LOTTO 5 MAX and LOTTO PLUS 2 are distinct games, not identical draws. Prediction heuristics do not increase the mathematical odds of a fair Lotto combination.
