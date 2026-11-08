@@ -136,7 +136,7 @@ def refresh(force=False):
         LAST_FETCH=time.time()
     try:
         if not BETTIP_URL.startswith('https://'):raise ValueError('Archive URL must be HTTPS')
-        response=requests.get(BETTIP_URL,headers={'Accept':'application/json','User-Agent':'ZF-Lotto-Robot/18 (+https://bettip.co.za/)'},timeout=(8,30))
+        response=requests.get(BETTIP_URL,headers={'Accept':'application/json','User-Agent':'ZF-Lotto-Robot/19 (+https://bettip.co.za/)'},timeout=(8,30))
         response.raise_for_status()
         if len(response.content)>20_000_000:raise ValueError('Archive exceeds 20MB safety limit')
         import json
@@ -291,15 +291,15 @@ def home(): return send_from_directory('.','index.html')
 def status():
     ds=snapshot()
     with LOCK: err=LAST_ERROR; src=SOURCE; last=LAST_FETCH; plus_counts={k:len(v) for k,v in PLUS_DRAWS.items()}; plus_errors=dict(PLUS_ERRORS)
-    return jsonify(combined_error=COMBINED_ERROR,combined_source=COMBINED_SOURCE,draws=len(ds),first=ds[0]['date'] if ds else None,last=ds[-1]['date'] if ds else None,provider='BetTip mixed SA archive',online_provider_configured=True,source=src,fetch_error=err,cache_age_seconds=round(time.time()-last) if last else None,plus_draws=plus_counts,plus_errors=plus_errors,database=storage.DB,persistent_disk_configured=storage.DB.startswith('/var/data/'),historical_rules='Provisional historical eras; current 6/52 begins June 2026. Verify historical rule dates.')
+    return jsonify(minimum_training_draws=12,bet_tip_endpoint=BETTIP_URL,bet_tip_last_attempt=LAST_FETCH or None,combined_error=COMBINED_ERROR,combined_source=COMBINED_SOURCE,draws=len(ds),first=ds[0]['date'] if ds else None,last=ds[-1]['date'] if ds else None,provider='BetTip mixed SA archive',online_provider_configured=True,source=src,fetch_error=err,cache_age_seconds=round(time.time()-last) if last else None,plus_draws=plus_counts,plus_errors=plus_errors,database=storage.DB,persistent_disk_configured=storage.DB.startswith('/var/data/'),historical_rules='Provisional historical eras; current 6/52 begins June 2026. Verify historical rule dates.')
 
 @app.post('/api/refresh')
 def refresh_endpoint():
     refresh(force=True)
     refresh_combined(force=True)
-    for kind in PLUS_DRAWS:refresh_plus(kind,force=True)
+    for kind in PLUS_DRAWS:refresh_plus(kind,force=False)
     pages=refresh_pages(force=True)
-    response=status().get_json();response['paged_download']=pages
+    response=status().get_json();response['paged_download']=pages;response['diagnostic']='Downloaded counts reflect only validated records; inspect fetch_error and combined_error. Plus 2 is not confirmed supported by BetTip.'
     return jsonify(response)
 
 @app.get('/api/data-health')
@@ -350,8 +350,8 @@ def prediction():
     if day>=date.today().isoformat():return jsonify(error='Choose a previous draw date'),400
     refresh_combined()
     history=training_history(day)
-    if len(history)<25:
-        return jsonify(error=f'Only {len(history)} earlier same-era Main LOTTO draws are stored for {day}; 25 are required. Import older 6/52 results or select a later date. Data coverage is not the same as data completeness.', earlier_draws=len(history),required=25),400
+    if len(history)<12:
+        return jsonify(error=f'Only {len(history)} earlier same-era Main LOTTO draws are stored for {day}; 12 are required. Import additional verified same-era results or select a later date. Data coverage is not the same as data completeness.', earlier_draws=len(history),required=12),400
     try: rows=predict(history,day,str(p.get('reset',0)),ball_max=training_era(day)[2])
     except ValueError as exc:
         return jsonify(error=str(exc)+' Historical archive may be unavailable. Check Data Status.'),400
@@ -360,7 +360,7 @@ def prediction():
         if len(SESSIONS)>1000: SESSIONS.pop(next(iter(SESSIONS)))
         SESSIONS[token]={'date':day,'rows':rows}
     _,best_window,validation=adaptive_window_scores(history,training_era(day)[2])
-    return jsonify(token=token,date=day,rows=rows,training_draws=len(history),all_numbers_allowed=True,adaptive_window=best_window,adaptive_validation=validation)
+    return jsonify(token=token,date=day,rows=rows,training_draws=len(history),all_numbers_allowed=True,adaptive_window=best_window,adaptive_validation=validation,limited_history=len(history)<25)
 
 @app.post('/api/reveal')
 def reveal():

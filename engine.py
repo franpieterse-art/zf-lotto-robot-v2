@@ -66,7 +66,7 @@ def hottest_numbers(history, count=5, ball_max=N):
 def adaptive_window_scores(history, ball_max=N):
     """Select lookback by walk-forward validation strictly before target."""
     windows=(10,25,50,100,200)
-    nvalid=min(24,max(0,len(history)-25))
+    nvalid=min(24,max(0,len(history)-12))
     scores={}
     for window in windows:
         hits=0
@@ -81,7 +81,7 @@ def adaptive_window_scores(history, ball_max=N):
     return {n:counts[n]/max(1,min(best,len(history))) for n in range(1,ball_max+1)},best,scores
 
 def predict(history, target, salt='0', ball_max=N):
-    if len(history)<25:raise ValueError('At least 25 earlier verified draws are needed to predict.')
+    if len(history)<12:raise ValueError('At least 12 earlier same-era verified draws are needed to predict.')
     sets,pairs=score_sets(history,ball_max)
     adaptive,_,_=adaptive_window_scores(history,ball_max)
     sets[4]=adaptive
@@ -115,7 +115,7 @@ def walkforward(draws,start=None,end=None,limit=200,era_fn=None):
         else:
             ball_max=N
             history=[d for d in draws if d['date']<day]
-        if len(history)<25:continue
+        if len(history)<12:continue
         results.append({'date':day,'actual':target['numbers'],'rows':compare(predict(history,day,ball_max=ball_max),target['numbers']),'training_draws':len(history),'number_range':ball_max})
         if len(results)>=limit:break
     summary=[]
