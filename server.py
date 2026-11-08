@@ -2,6 +2,7 @@ import csv, io, os, re, time, secrets, threading
 from datetime import date, datetime
 from flask import Flask, request, jsonify, send_from_directory
 import requests
+import storage
 from engine import predict, compare, walkforward, hottest_numbers
 
 app = Flask(__name__, static_folder='.', static_url_path='')
@@ -67,6 +68,7 @@ def validate_record(record,expected_game='lotto',allow_unlabelled=False):
         kind=expected_game
     if kind!=expected_game:return None
     day=normalized_date(record.get('date',record.get('draw_date',record.get('drawDate'))))
+    if day<'2026-06-04':return None  # Older draw formats must not enter the 6/52 training set.
     nums=sorted(parse_numbers(record))
     if len(nums)!=6 or len(set(nums))!=6 or not all(1<=n<=52 for n in nums):
         raise ValueError('Invalid six-number draw for '+day)
@@ -98,7 +100,7 @@ def load_local():
     if not os.path.isfile(path): return
     with open(path,'rb') as f: rows,_=parse_archive(f.read(),'text/csv')
     with LOCK:
-        DRAWS.update(rows)
+        storage.save('lotto',rows,'local CSV'); DRAWS.update(rows)
         global SOURCE
         SOURCE='Local verified CSV (user supplied)'
 
@@ -108,8 +110,17 @@ def load_plus_local():
         try:
             with open(filename,'rb') as f:
                 rows,_=parse_archive(f.read(),'text/csv',kind,True)
-            with LOCK: PLUS_DRAWS[kind].update(rows)
+            with LOCK:
+                storage.save(kind,rows,'local CSV'); PLUS_DRAWS[kind].update(rows)
         except Exception as exc: PLUS_ERRORS[kind]='Local archive: '+str(exc)
+
+# Load cached results before making any external network requests.
+try:
+    cached=storage.load()
+    DRAWS.update(cached['lotto'])
+    for kind in PLUS_DRAWS: PLUS_DRAWS[kind].update(cached[kind])
+    if any(cached.values()): SOURCE='SQLite historical cache'
+except Exception as exc: LAST_ERROR='Database: '+str(exc)
 
 try: load_local()
 except Exception as exc: LAST_ERROR='Local archive: '+str(exc)
@@ -131,7 +142,7 @@ def refresh(force=False):
             for day,nums in rows.items():
                 if day in DRAWS and DRAWS[day]!=nums:
                     raise ValueError('Source conflict for '+day+'; refusing to overwrite existing result')
-            DRAWS.update(rows)
+            storage.save('lotto',rows,'BetTip'); DRAWS.update(rows)
             LAST_ERROR=None
             SOURCE='BetTip archive (unverified third-party provider)'
     except Exception as exc:
@@ -188,6 +199,7 @@ def refresh_combined(force=False):
                 for day,nums in found[game].items():
                     if day in store and store[day]!=nums:
                         raise ValueError('Conflicting verified result for '+game+' '+day)
+            for game,rows in found.items():storage.save(game,rows,'Lottology')
             DRAWS.update(found['lotto'])
             PLUS_DRAWS['plus1'].update(found['plus1'])
             PLUS_DRAWS['plus2'].update(found['plus2'])
@@ -212,10 +224,42 @@ def refresh_plus(kind,force=False):
             for day,nums in rows.items():
                 if day in PLUS_DRAWS[kind] and PLUS_DRAWS[kind][day]!=nums:
                     raise ValueError('Conflicting '+kind+' result on '+day)
-            PLUS_DRAWS[kind].update(rows)
+            storage.save(kind,rows,'BetTip'); PLUS_DRAWS[kind].update(rows)
             PLUS_ERRORS[kind]=None
     except Exception as exc:
         with LOCK:PLUS_ERRORS[kind]=f'{type(exc).__name__}: {str(exc)[:250]}'
+
+def refresh_pages(force=False):
+    """Optional page URL templates: use {page} and configure max pages explicitly.
+
+    Supports per-game JSON or CSV archive pages. Never guesses undocumented endpoints.
+    """
+    global SOURCE
+    errors={}; totals={}
+    maxpages=max(1,min(500,int(os.getenv('LOTTO_ARCHIVE_MAX_PAGES','30'))))
+    for game in ('lotto','plus1','plus2'):
+        template=os.getenv('LOTTO_'+game.upper()+'_PAGED_URL','')
+        if not template:continue
+        if not template.startswith('https://') or '{page}' not in template:
+            errors[game]='URL must be HTTPS and include {page}';continue
+        total=0
+        for page in range(1,maxpages+1):
+            try:
+                response=requests.get(template.format(page=page),timeout=(6,16),headers={'User-Agent':'ZF-Lotto-Robot/13'})
+                if response.status_code in (404,410):break
+                response.raise_for_status()
+                if len(response.content)>12_000_000:raise ValueError('Page exceeds size limit')
+                rows,_=parse_archive(response.content,response.headers.get('Content-Type',''),game,True)
+                store=DRAWS if game=='lotto' else PLUS_DRAWS[game]
+                with LOCK:
+                    storage.save(game,rows,'Configured paged archive');store.update(rows)
+                total+=len(rows)
+                if len(rows)==0:break
+            except Exception as exc:
+                errors[game]=f'Page {page}: {str(exc)[:140]}';break
+        totals[game]=total
+        if total:SOURCE='SQLite cache + configured paged archive'
+    return {'downloaded':totals,'errors':errors}
 
 def snapshot():
     with LOCK: return [{'date':d,'numbers':nums} for d,nums in sorted(DRAWS.items())]
@@ -228,14 +272,37 @@ def status():
     refresh_combined()
     ds=snapshot()
     with LOCK: err=LAST_ERROR; src=SOURCE; last=LAST_FETCH; plus_counts={k:len(v) for k,v in PLUS_DRAWS.items()}; plus_errors=dict(PLUS_ERRORS)
-    return jsonify(combined_error=COMBINED_ERROR,combined_source=COMBINED_SOURCE,draws=len(ds),first=ds[0]['date'] if ds else None,last=ds[-1]['date'] if ds else None,provider='BetTip',online_provider_configured=True,source=src,fetch_error=err,cache_age_seconds=round(time.time()-last) if last else None,plus_draws=plus_counts,plus_errors=plus_errors)
+    return jsonify(combined_error=COMBINED_ERROR,combined_source=COMBINED_SOURCE,draws=len(ds),first=ds[0]['date'] if ds else None,last=ds[-1]['date'] if ds else None,provider='BetTip',online_provider_configured=True,source=src,fetch_error=err,cache_age_seconds=round(time.time()-last) if last else None,plus_draws=plus_counts,plus_errors=plus_errors,database=storage.DB,persistent_disk_configured=storage.DB.startswith('/var/data/'),historical_rules='Predictions use the 6/52 era only; older game formats are not mixed.')
 
 @app.post('/api/refresh')
 def refresh_endpoint():
     refresh_combined(force=True)
     refresh(force=True)
     for kind in PLUS_DRAWS:refresh_plus(kind,force=True)
-    return status()
+    pages=refresh_pages(force=True)
+    response=status().get_json();response['paged_download']=pages
+    return jsonify(response)
+
+@app.get('/api/data-health')
+def data_health():
+    with LOCK:
+        stores={'lotto':dict(DRAWS),'plus1':dict(PLUS_DRAWS['plus1']),'plus2':dict(PLUS_DRAWS['plus2'])}
+    report={}
+    for game,rows in stores.items():
+        dates=sorted(rows)
+        report[game]={'count':len(dates),'first':dates[0] if dates else None,'last':dates[-1] if dates else None,
+                      'pre_2026_06_04':sum(d<'2026-06-04' for d in dates),
+                      'note':'Coverage counts are not proof of completeness or official verification.'}
+    return jsonify(games=report,database=storage.DB,persistence_note='Render free filesystem is ephemeral. Configure a persistent disk or commit exported CSV files.')
+
+@app.get('/api/export/<game>')
+def export_history(game):
+    if game not in ('lotto','plus1','plus2'):return jsonify(error='Unknown game'),400
+    with LOCK: rows=dict(DRAWS if game=='lotto' else PLUS_DRAWS[game])
+    output=io.StringIO();writer=csv.writer(output);writer.writerow(['date','n1','n2','n3','n4','n5','n6'])
+    for day,nums in sorted(rows.items()):writer.writerow([day,*nums])
+    from flask import Response
+    return Response(output.getvalue(),mimetype='text/csv',headers={'Content-Disposition':f'attachment; filename=zf_{game}_history.csv'})
 
 @app.post('/api/import')
 def import_csv():
@@ -249,7 +316,7 @@ def import_csv():
         with LOCK:
             for d,nums in rows.items():
                 if d in target and target[d]!=nums: raise ValueError('Conflicting result: '+d)
-            target.update(rows)
+            storage.save(kind,rows,'CSV upload'); target.update(rows)
         return jsonify(imported=len(rows),total=len(target),game=kind)
     except Exception as e:return jsonify(error=str(e)),400
 
