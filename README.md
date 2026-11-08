@@ -32,3 +32,9 @@ Source results are third-party, not automatically official-verified. Imported nu
 - Reveal distinguishes missing archive data from the possibility that a game was not held.
 
 **Important:** This release does not establish that the configured third-party API endpoints work or provide a complete historical dataset. No results are fabricated. 6/52-era results are kept separate from earlier rule sets. Render's free ephemeral filesystem is not permanent: use CSV exports or a persistent disk.
+
+
+## V15 user-provided historical CSV
+Bundled `za_lotto.csv`: 1,230 Main LOTTO rows (2015-01-03 through 2026-10-24). Automatically imported at startup and cached in SQLite. This is user-supplied, not independently verified. No PLUS data is in this file.
+
+Training and walk-forward backtests only use draws strictly before the target date and within conservative, **provisional** number-range eras: 2015–2016 6/49, 2017–2024 6/52, 2025 onward 6/58. Verify precise rule-change dates with official records before relying on results near transitions. The app does not claim predictive advantage over random lottery draws.

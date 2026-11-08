@@ -68,12 +68,10 @@ def validate_record(record,expected_game='lotto',allow_unlabelled=False):
         kind=expected_game
     if kind!=expected_game:return None
     day=normalized_date(record.get('date',record.get('draw_date',record.get('drawDate'))))
-    if day<'2026-06-04':return None  # Older draw formats must not enter the 6/52 training set.
+    # Accept the uploaded historical Main LOTTO archive across historical number ranges.
     nums=sorted(parse_numbers(record))
-    if len(nums)!=6 or len(set(nums))!=6 or not all(1<=n<=52 for n in nums):
+    if len(nums)!=6 or len(set(nums))!=6 or not all(1<=n<=58 for n in nums):
         raise ValueError('Invalid six-number draw for '+day)
-    # Reject rows whose ruleset is not known to be 6/52. Historical game rules changed.
-    if max(nums)>52: raise ValueError('Out-of-range draw')
     return day,nums
 
 def parse_archive(raw,content_type='',expected_game='lotto',allow_unlabelled=False):
@@ -96,7 +94,7 @@ def parse_archive(raw,content_type='',expected_game='lotto',allow_unlabelled=Fal
     return out,bad
 
 def load_local():
-    path=os.getenv('LOTTO_DATA_FILE','draws.csv')
+    path=os.getenv('LOTTO_DATA_FILE','za_lotto.csv')
     if not os.path.isfile(path): return
     with open(path,'rb') as f: rows,_=parse_archive(f.read(),'text/csv')
     with LOCK:
@@ -261,6 +259,17 @@ def refresh_pages(force=False):
         if total:SOURCE='SQLite cache + configured paged archive'
     return {'downloaded':totals,'errors':errors}
 
+def training_era(day):
+    # Conservative year-based splits: do not mix 6/49, 6/52, and 6/58 datasets.
+    # Boundaries must be confirmed against official rules before treating backtests as definitive.
+    if day < '2017-01-01': return ('2015-01-01','2017-01-01',49)
+    if day < '2025-01-01': return ('2017-01-01','2025-01-01',52)
+    return ('2025-01-01','9999-12-31',58)
+
+def training_history(day):
+    start,end,ball_max=training_era(day)
+    return [d for d in snapshot() if start<=d['date']<min(day,end) and max(d['numbers'])<=ball_max]
+
 def snapshot():
     with LOCK: return [{'date':d,'numbers':nums} for d,nums in sorted(DRAWS.items())]
 
@@ -271,7 +280,7 @@ def home(): return send_from_directory('.','index.html')
 def status():
     ds=snapshot()
     with LOCK: err=LAST_ERROR; src=SOURCE; last=LAST_FETCH; plus_counts={k:len(v) for k,v in PLUS_DRAWS.items()}; plus_errors=dict(PLUS_ERRORS)
-    return jsonify(combined_error=COMBINED_ERROR,combined_source=COMBINED_SOURCE,draws=len(ds),first=ds[0]['date'] if ds else None,last=ds[-1]['date'] if ds else None,provider='BetTip',online_provider_configured=True,source=src,fetch_error=err,cache_age_seconds=round(time.time()-last) if last else None,plus_draws=plus_counts,plus_errors=plus_errors,database=storage.DB,persistent_disk_configured=storage.DB.startswith('/var/data/'),historical_rules='Predictions use the 6/52 era only; older game formats are not mixed.')
+    return jsonify(combined_error=COMBINED_ERROR,combined_source=COMBINED_SOURCE,draws=len(ds),first=ds[0]['date'] if ds else None,last=ds[-1]['date'] if ds else None,provider='BetTip',online_provider_configured=True,source=src,fetch_error=err,cache_age_seconds=round(time.time()-last) if last else None,plus_draws=plus_counts,plus_errors=plus_errors,database=storage.DB,persistent_disk_configured=storage.DB.startswith('/var/data/'),historical_rules='Historical eras are separated into provisional 6/49 (2015–16), 6/52 (2017–24), and 6/58 (2025 onward) groups; confirm exact official transition dates.')
 
 @app.post('/api/refresh')
 def refresh_endpoint():
@@ -329,17 +338,17 @@ def prediction():
     except (ValueError,TypeError):return jsonify(error='Choose a valid date'),400
     if day>=date.today().isoformat():return jsonify(error='Choose a previous draw date'),400
     refresh_combined()
-    history=[d for d in snapshot() if d['date']<day]
+    history=training_history(day)
     if len(history)<25:
-        return jsonify(error=f'Only {len(history)} earlier Main LOTTO draws are stored for {day}; 25 are required. Import older 6/52 results or select a later date. Data coverage is not the same as data completeness.', earlier_draws=len(history),required=25),400
-    try: rows=predict(history,day,str(p.get('reset',0)))
+        return jsonify(error=f'Only {len(history)} earlier same-era Main LOTTO draws are stored for {day}; 25 are required. Import older 6/52 results or select a later date. Data coverage is not the same as data completeness.', earlier_draws=len(history),required=25),400
+    try: rows=predict(history,day,str(p.get('reset',0)),ball_max=training_era(day)[2])
     except ValueError as exc:
         return jsonify(error=str(exc)+' Historical archive may be unavailable. Check Data Status.'),400
     token=secrets.token_urlsafe(32)
     with LOCK:
         if len(SESSIONS)>1000: SESSIONS.pop(next(iter(SESSIONS)))
         SESSIONS[token]={'date':day,'rows':rows}
-    return jsonify(token=token,date=day,rows=rows,training_draws=len(history),excluded_hot_numbers=hottest_numbers(history, count=5))
+    return jsonify(token=token,date=day,rows=rows,training_draws=len(history),excluded_hot_numbers=hottest_numbers(history, count=5, ball_max=training_era(day)[2]))
 
 @app.post('/api/reveal')
 def reveal():
@@ -369,6 +378,6 @@ def backtest():
     except (ValueError,TypeError):return jsonify(error='Invalid limit'),400
     refresh_combined()
     # The engine trains on only prior draws. Data must be checked for completeness.
-    return jsonify(walkforward(snapshot(),p.get('start'),p.get('end'),limit))
+    return jsonify(walkforward(snapshot(),p.get('start'),p.get('end'),limit,training_era))
 
 if __name__=='__main__': app.run(host='0.0.0.0',port=int(os.getenv('PORT','10000')))
