@@ -45,7 +45,7 @@ def parse_numbers(record):
 def extract_records(payload):
     if isinstance(payload,list): return payload
     if isinstance(payload,dict):
-        for key in ('draws','results','data','lotto','items','history'):
+        for key in ('data','draws','results','items','history'):
             if key in payload:
                 val=payload[key]
                 if isinstance(val,list): return val
@@ -53,12 +53,12 @@ def extract_records(payload):
     raise ValueError('Unknown BetTip archive response shape')
 
 def game_kind(record):
-    value=str(record.get('game',record.get('game_name',record.get('lottery','lotto')))).lower()
+    value=str(record.get('game',record.get('gameName',record.get('game_name',record.get('lottery','lotto'))))).lower()
     value=re.sub(r'[^a-z0-9]+',' ',value).strip()
-    if 'daily' in value or 'powerball' in value: return None
-    if re.search(r'(?:plus|\bpl\b)\s*2\b',value): return 'plus2'
-    if re.search(r'(?:plus|\bpl\b)\s*1\b',value): return 'plus1'
-    if value in ('lotto','sa lotto','south african lotto','national lotto','national lottery lotto'): return 'lotto'
+    if 'daily' in value or 'powerball' in value or '5 max' in value:return None
+    if re.search(r'(?:plus|pl)\s*2\b',value):return 'plus2'
+    if re.search(r'(?:plus|pl)\s*1\b',value):return 'plus1'
+    if value in ('lotto','sa lotto','south african lotto','national lotto','national lottery lotto'):return 'lotto'
     return None
 
 def validate_record(record,expected_game='lotto',allow_unlabelled=False):
@@ -125,26 +125,50 @@ except Exception as exc: LAST_ERROR='Local archive: '+str(exc)
 load_plus_local()
 
 def refresh(force=False):
+    """Load BetTip's documented mixed South African lottery archive once.
+
+    The API wraps draws under `data`; each row has a `game` slug.
+    Only Lotto/Plus 1/Plus 2 six-number records are accepted.
+    """
     global LAST_FETCH,LAST_ERROR,SOURCE
     with LOCK:
-        if not force and LAST_FETCH and time.time()-LAST_FETCH<TTL: return
-        # Avoid repeated failing requests on every page load.
+        if not force and LAST_FETCH and time.time()-LAST_FETCH<TTL:return
         LAST_FETCH=time.time()
     try:
-        if not BETTIP_URL.startswith('https://'): raise ValueError('Archive URL must be HTTPS')
-        resp=requests.get(BETTIP_URL,headers={'Accept':'application/json,text/csv','User-Agent':'ZF-Lotto-Robot/7.0'},timeout=(7,18))
-        resp.raise_for_status()
-        if len(resp.content)>12_000_000: raise ValueError('Archive exceeds 12MB safety limit')
-        rows,bad=parse_archive(resp.content,resp.headers.get('Content-Type',''))
+        if not BETTIP_URL.startswith('https://'):raise ValueError('Archive URL must be HTTPS')
+        response=requests.get(BETTIP_URL,headers={'Accept':'application/json','User-Agent':'ZF-Lotto-Robot/18 (+https://bettip.co.za/)'},timeout=(8,30))
+        response.raise_for_status()
+        if len(response.content)>20_000_000:raise ValueError('Archive exceeds 20MB safety limit')
+        import json
+        records=extract_records(response.json())
+        found={'lotto':{},'plus1':{},'plus2':{}}
+        for record in records:
+            if not isinstance(record,dict):continue
+            kind=game_kind(record)
+            if kind not in found:continue
+            try:item=validate_record(record,kind)
+            except (ValueError,TypeError,KeyError):continue
+            if not item:continue
+            day,nums=item
+            if day in found[kind] and found[kind][day]!=nums:
+                raise ValueError('BetTip conflicting '+kind+' draw on '+day)
+            found[kind][day]=nums
+        if not any(found.values()):raise ValueError('BetTip returned no valid Lotto/Plus draws; inspect archive schema')
         with LOCK:
-            for day,nums in rows.items():
-                if day in DRAWS and DRAWS[day]!=nums:
-                    raise ValueError('Source conflict for '+day+'; refusing to overwrite existing result')
-            storage.save('lotto',rows,'BetTip'); DRAWS.update(rows)
+            for kind,rows in found.items():
+                store=DRAWS if kind=='lotto' else PLUS_DRAWS[kind]
+                for day,nums in rows.items():
+                    if day in store and store[day]!=nums:
+                        raise ValueError('Source conflict for '+kind+' '+day+'; existing record preserved')
+            for kind,rows in found.items():
+                if not rows:continue
+                storage.save(kind,rows,'BetTip API')
+                (DRAWS if kind=='lotto' else PLUS_DRAWS[kind]).update(rows)
+                if kind!='lotto':PLUS_ERRORS[kind]=None
             LAST_ERROR=None
-            SOURCE='BetTip archive (unverified third-party provider)'
+            SOURCE='BetTip SA Lotto historical API (third-party)'
     except Exception as exc:
-        with LOCK: LAST_ERROR=f'{type(exc).__name__}: {str(exc)[:250]}'
+        with LOCK:LAST_ERROR=f'{type(exc).__name__}: {str(exc)[:250]}'
 
 # Secondary source: publicly viewable archive listing all three games in one table.
 # HTML is parsed by column heading, never by arbitrary numbers on a page.
@@ -208,24 +232,11 @@ def refresh_combined(force=False):
         with LOCK:COMBINED_ERROR=f'{type(exc).__name__}: {str(exc)[:220]}'
 
 def refresh_plus(kind,force=False):
+    # BetTip documents ONE mixed lotto/draws.json feed, not separate Plus URLs.
+    refresh(force=force)
     with LOCK:
-        if not force and PLUS_FETCH[kind] and time.time()-PLUS_FETCH[kind]<TTL:return
-        PLUS_FETCH[kind]=time.time()
-    try:
-        url=PLUS_URLS[kind]
-        if not url.startswith('https://'):raise ValueError('Archive URL must use HTTPS')
-        response=requests.get(url,headers={'Accept':'application/json,text/csv','User-Agent':'ZF-Lotto-Robot/9.0'},timeout=(7,18))
-        response.raise_for_status()
-        if len(response.content)>12_000_000:raise ValueError('Archive exceeds 12MB limit')
-        rows,_=parse_archive(response.content,response.headers.get('Content-Type',''),kind,True)
-        with LOCK:
-            for day,nums in rows.items():
-                if day in PLUS_DRAWS[kind] and PLUS_DRAWS[kind][day]!=nums:
-                    raise ValueError('Conflicting '+kind+' result on '+day)
-            storage.save(kind,rows,'BetTip'); PLUS_DRAWS[kind].update(rows)
-            PLUS_ERRORS[kind]=None
-    except Exception as exc:
-        with LOCK:PLUS_ERRORS[kind]=f'{type(exc).__name__}: {str(exc)[:250]}'
+        if not PLUS_DRAWS[kind]:
+            PLUS_ERRORS[kind]='No '+kind+' records in the BetTip archive. This API may not cover the game.'
 
 def refresh_pages(force=False):
     """Optional page URL templates: use {page} and configure max pages explicitly.
@@ -280,12 +291,12 @@ def home(): return send_from_directory('.','index.html')
 def status():
     ds=snapshot()
     with LOCK: err=LAST_ERROR; src=SOURCE; last=LAST_FETCH; plus_counts={k:len(v) for k,v in PLUS_DRAWS.items()}; plus_errors=dict(PLUS_ERRORS)
-    return jsonify(combined_error=COMBINED_ERROR,combined_source=COMBINED_SOURCE,draws=len(ds),first=ds[0]['date'] if ds else None,last=ds[-1]['date'] if ds else None,provider='BetTip',online_provider_configured=True,source=src,fetch_error=err,cache_age_seconds=round(time.time()-last) if last else None,plus_draws=plus_counts,plus_errors=plus_errors,database=storage.DB,persistent_disk_configured=storage.DB.startswith('/var/data/'),historical_rules='Provisional historical eras; current 6/52 begins June 2026. Verify historical rule dates.')
+    return jsonify(combined_error=COMBINED_ERROR,combined_source=COMBINED_SOURCE,draws=len(ds),first=ds[0]['date'] if ds else None,last=ds[-1]['date'] if ds else None,provider='BetTip mixed SA archive',online_provider_configured=True,source=src,fetch_error=err,cache_age_seconds=round(time.time()-last) if last else None,plus_draws=plus_counts,plus_errors=plus_errors,database=storage.DB,persistent_disk_configured=storage.DB.startswith('/var/data/'),historical_rules='Provisional historical eras; current 6/52 begins June 2026. Verify historical rule dates.')
 
 @app.post('/api/refresh')
 def refresh_endpoint():
-    refresh_combined(force=True)
     refresh(force=True)
+    refresh_combined(force=True)
     for kind in PLUS_DRAWS:refresh_plus(kind,force=True)
     pages=refresh_pages(force=True)
     response=status().get_json();response['paged_download']=pages
