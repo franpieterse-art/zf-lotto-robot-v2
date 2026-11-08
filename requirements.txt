@@ -1,4 +1,1 @@
-
-Flask
-gunicorn
-requests
+# No third-party Python packages required.

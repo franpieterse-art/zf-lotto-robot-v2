@@ -1,6 +1,10 @@
 services:
   - type: web
     name: zf-lotto-robot
-    runtime: static
-    buildCommand: echo "Static site ready"
-    staticPublishPath: .
+    runtime: python
+    plan: free
+    buildCommand: "echo Ready"
+    startCommand: "python server.py"
+    envVars:
+      - key: RESULTSZA_API_KEY
+        sync: false
