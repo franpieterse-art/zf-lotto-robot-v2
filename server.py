@@ -392,7 +392,7 @@ def prediction():
     with LOCK:
         if len(SESSIONS)>1000: SESSIONS.pop(next(iter(SESSIONS)))
         SESSIONS[token]={'date':day,'rows':rows}
-    return jsonify(token=token,date=day,rows=rows,training_draws=len(history),all_numbers_allowed=True,eligible_numbers=list(range(1,training_era(day)[2]+1)),model_validation={'formula_weights':{'long':25,'recent':25,'momentum':15,'gap':5,'pair':15,'stability':15}},limited_history=len(history)<25)
+    return jsonify(token=token,date=day,rows=rows,training_draws=len(history),all_numbers_allowed=True,eligible_numbers=list(range(1,training_era(day)[2]+1)),model_validation={'formula':'V35 multi-window consensus with disagreement shrinkage and ten-row diversity'},limited_history=len(history)<25)
 
 @app.post('/api/reveal')
 def reveal():
