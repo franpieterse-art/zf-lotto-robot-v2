@@ -278,8 +278,14 @@ def training_era(day):
     return ('2026-06-01','9999-12-31',52)
 
 def training_history(day):
-    start,end,ball_max=training_era(day)
-    return [d for d in snapshot() if start<=d['date']<min(day,end) and max(d['numbers'])<=ball_max]
+    """Use ALL stored, verified Main LOTTO draws before the chosen date.
+
+    Older draws with different ball ranges are retained as historical
+    observations. The prediction engine scores only balls eligible for
+    the selected date; never use a draw on/after the target date.
+    """
+    return [d for d in snapshot() if d['date'] < day]
+
 
 def snapshot():
     with LOCK: return [{'date':d,'numbers':nums} for d,nums in sorted(DRAWS.items())]
@@ -291,7 +297,7 @@ def home(): return send_from_directory('.','index.html')
 def status():
     ds=snapshot()
     with LOCK: err=LAST_ERROR; src=SOURCE; last=LAST_FETCH; plus_counts={k:len(v) for k,v in PLUS_DRAWS.items()}; plus_errors=dict(PLUS_ERRORS)
-    return jsonify(minimum_training_draws=12,bet_tip_endpoint=BETTIP_URL,bet_tip_last_attempt=LAST_FETCH or None,combined_error=COMBINED_ERROR,combined_source=COMBINED_SOURCE,draws=len(ds),first=ds[0]['date'] if ds else None,last=ds[-1]['date'] if ds else None,provider='BetTip mixed SA archive',online_provider_configured=True,source=src,fetch_error=err,cache_age_seconds=round(time.time()-last) if last else None,plus_draws=plus_counts,plus_errors=plus_errors,database=storage.DB,persistent_disk_configured=storage.DB.startswith('/var/data/'),historical_rules='Provisional historical eras; current 6/52 begins June 2026. Verify historical rule dates.')
+    return jsonify(minimum_training_draws=12,bet_tip_endpoint=BETTIP_URL,bet_tip_last_attempt=LAST_FETCH or None,combined_error=COMBINED_ERROR,combined_source=COMBINED_SOURCE,draws=len(ds),first=ds[0]['date'] if ds else None,last=ds[-1]['date'] if ds else None,provider='BetTip mixed SA archive',online_provider_configured=True,source=src,fetch_error=err,cache_age_seconds=round(time.time()-last) if last else None,plus_draws=plus_counts,plus_errors=plus_errors,database=storage.DB,persistent_disk_configured=storage.DB.startswith('/var/data/'),historical_rules='All stored Main LOTTO draws strictly before the selected date are used. Historical ball ranges may differ; results across rule changes are not directly comparable.')
 
 @app.post('/api/refresh')
 def refresh_endpoint():
@@ -348,10 +354,10 @@ def prediction():
     try: date.fromisoformat(day)
     except (ValueError,TypeError):return jsonify(error='Choose a valid date'),400
     if day>=date.today().isoformat():return jsonify(error='Choose a previous draw date'),400
-    refresh_combined()
+    # Never block a prediction on a third-party site. Use cached/local draws.
     history=training_history(day)
     if len(history)<12:
-        return jsonify(error=f'Only {len(history)} earlier same-era Main LOTTO draws are stored for {day}; 12 are required. Import additional verified same-era results or select a later date. Data coverage is not the same as data completeness.', earlier_draws=len(history),required=12),400
+        return jsonify(error=f'Only {len(history)} earlier Main LOTTO draws are stored for {day}; 12 are required. Import additional verified earlier results or select a later date. Data coverage is not the same as data completeness.', earlier_draws=len(history),required=12),400
     try: rows=predict(history,day,str(p.get('reset',0)),ball_max=training_era(day)[2])
     except ValueError as exc:
         return jsonify(error=str(exc)+' Historical archive may be unavailable. Check Data Status.'),400
@@ -370,13 +376,13 @@ def reveal():
     day=sess['date']
     with LOCK: actual=DRAWS.get(day)
     if actual is None:
-        refresh(force=True)
         with LOCK: actual=DRAWS.get(day)
-    refresh_combined()
+    # Reveal reads cached results immediately; online sync is explicit via Retry.
     # Each game is independent. Never substitute the main draw for Plus results.
     for kind in ('plus1','plus2'):
         with LOCK:missing=day not in PLUS_DRAWS[kind]
-        if missing:refresh_plus(kind)
+        # Missing results remain unavailable until a separate refresh succeeds.
+        pass
     with LOCK:
         results={'lotto':DRAWS.get(day),'plus1':PLUS_DRAWS['plus1'].get(day),'plus2':PLUS_DRAWS['plus2'].get(day)}
         errors=dict(PLUS_ERRORS)
@@ -388,7 +394,7 @@ def backtest():
     p=request.get_json(silent=True) or {}
     try: limit=max(1,min(500,int(p.get('limit',100))))
     except (ValueError,TypeError):return jsonify(error='Invalid limit'),400
-    refresh_combined()
+    # No external HTTP calls in backtesting.
     # The engine trains on only prior draws. Data must be checked for completeness.
     return jsonify(walkforward(snapshot(),p.get('start'),p.get('end'),limit,training_era))
 

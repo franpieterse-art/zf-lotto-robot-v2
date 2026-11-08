@@ -81,7 +81,7 @@ def adaptive_window_scores(history, ball_max=N):
     return {n:counts[n]/max(1,min(best,len(history))) for n in range(1,ball_max+1)},best,scores
 
 def predict(history, target, salt='0', ball_max=N):
-    if len(history)<12:raise ValueError('At least 12 earlier same-era verified draws are needed to predict.')
+    if len(history)<12:raise ValueError('At least 12 earlier verified Main LOTTO draws are needed to predict.')
     sets,pairs=score_sets(history,ball_max)
     adaptive,_,_=adaptive_window_scores(history,ball_max)
     sets[4]=adaptive
