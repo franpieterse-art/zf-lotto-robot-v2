@@ -1,8 +1,9 @@
-# ZF Lotto Robot V32 — Improved Formula
-V32 uses all eligible numbers and a six-factor, smoothed ensemble:
-long-term frequency 25%, multi-horizon recent frequency 25%, momentum 15%, gap 5%, pair co-occurrence 15%, stability 15%.
+# ZF Lotto Robot V33 — Regime-aware formula
 
-Changes: Bayesian-style smoothing, 20/60/150 draw lookbacks, historical number eligibility, deterministic five unique prediction rows, local-only Predict/Reveal/Backtest (no network waiting), date-based walk-forward testing with past-only data. No draw result is fabricated.
+Weights: long-term frequency 20%; smoothed recent 25/75/200 draw rates 30%; momentum 10%; gap 5%; pair residual 10%; trend stability 15%; reversion 10%.
 
-Install: Extract ZIP, replace repository files, commit, redeploy Render, Ctrl+F5.
-No formula can reliably predict an independent fair lottery draw. Backtest against random selections before claiming improvement.
+All eligible numbers are included. Uses only Main LOTTO results before the selected target date; preserves Predict → Reveal → Compare and walk-forward backtesting. Five rows use diversity penalties to avoid excessive repetition. Local prediction requests do not fetch external sites.
+
+Install: extract ZIP, upload all files to GitHub, commit, redeploy Render, hard-refresh browser.
+
+No historical scoring formula changes the odds of a fair lottery draw. This is an experimental ranking method, not validated predictive advantage.

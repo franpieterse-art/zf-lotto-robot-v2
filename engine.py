@@ -154,64 +154,61 @@ def selected_model_scores(history, ball_max=N):
 # No score is a calibrated winning probability.
 V29_WEIGHTS={'long_frequency':.20,'recent_frequency':.20,'momentum':.15,'gap':.10,'pairing':.15,'stability':.20}
 
-# V32: smoothed multi-horizon ensemble. Scores are NOT winning probabilities.
-V32_WEIGHTS={'long':.25,'recent':.25,'momentum':.15,'gap':.05,'pair':.15,'stability':.15}
+# V33: regime-aware, strongly smoothed scores. Descriptive scores, not probabilities.
+V33_WEIGHTS={'long':.20,'recent':.30,'momentum':.10,'gap':.05,'pair':.10,'stability':.15,'reversion':.10}
 
-def v32_scores(history,ball_max=N):
-    from itertools import combinations
+def _historical_max(d):
+    # Regime boundaries are approximate; past exposure is inferred from observed draw format.
+    return 49 if d['date']<'2017-01-01' else (58 if d['date']<'2026-06-01' else 52)
+
+def v33_scores(history,ball_max=N):
     pool=range(1,ball_max+1)
-    if not history: return {n:0.0 for n in pool}
-    # Historical eligibility: numbers 50+ did not exist in 6/49 draws.
-    eligible=Counter()
-    counts=Counter()
-    for d in history:
-        historical_max=49 if d['date']<'2017-01-01' else (58 if d['date']<'2026-06-01' else 52)
-        eligible.update(n for n in pool if n<=historical_max)
-        counts.update(n for n in d['numbers'] if n in pool)
-    def rate(window):
-        draws=history[-window:]
-        occ=Counter(n for d in draws for n in d['numbers'] if n in pool)
-        exposures=Counter()
+    if not history:return {n:0. for n in pool}
+    # For each number, only count draws in which it was eligible.
+    def rates(draws,prior=36):
+        occur=Counter(); exposure=Counter()
         for d in draws:
-            maximum=49 if d['date']<'2017-01-01' else (58 if d['date']<'2026-06-01' else 52)
-            exposures.update(n for n in pool if n<=maximum)
-        # Shrink toward uniform expectation: short samples should not dominate.
-        return {n:(occ[n]+12*6/ball_max)/(exposures[n]+12) for n in pool}
-    r20=rate(20);r60=rate(60);r150=rate(150)
-    long={n:(counts[n]+30*6/ball_max)/(eligible[n]+30) for n in pool}
-    recent={n:.50*r20[n]+.30*r60[n]+.20*r150[n] for n in pool}
-    momentum={n:r20[n]-r150[n] for n in pool}
-    gap={}
-    for n in pool:
-        # Gap is a descriptive signal, not evidence a number is 'due'.
-        last=next((i for i,d in enumerate(reversed(history)) if n in d['numbers']),len(history))
-        gap[n]=min(last,40)/40
-    # Pair score uses smoothed support, without treating co-occurrence as causation.
-    pair=Counter()
-    for d in history[-100:]:
-        for x,y in combinations(sorted(n for n in d['numbers'] if n in pool),2):
-            pair[x]+=1;pair[y]+=1
-    pairing={n:(pair[n]+5)/(min(100,len(history))+5) for n in pool}
-    stability={n:-abs(r20[n]-r60[n])-abs(r60[n]-r150[n]) for n in pool}
-    factors={'long':long,'recent':recent,'momentum':momentum,
-             'gap':gap,'pair':pairing,'stability':stability}
+            m=_historical_max(d)
+            exposure.update(n for n in pool if n<=m)
+            occur.update(n for n in d['numbers'] if n in pool)
+        # Uniform-prior shrinkage avoids treating small counts as meaningful trends.
+        return {n:(occur[n]+prior*6/ball_max)/(exposure[n]+prior) for n in pool}
+    long=rates(history,100)
+    r25=rates(history[-25:],36);r75=rates(history[-75:],50);r200=rates(history[-200:],75)
+    recent={n:.45*r25[n]+.35*r75[n]+.20*r200[n] for n in pool}
+    momentum={n:r25[n]-r200[n] for n in pool}
+    # Overdue numbers are NOT more likely; gap receives very low weight.
+    gap={n:min(next((i for i,d in enumerate(reversed(history)) if n in d['numbers']),len(history)),50)/50 for n in pool}
+    pairs=Counter();exposures=Counter()
+    for d in history[-150:]:
+        nums=sorted(n for n in d['numbers'] if n in pool)
+        exposures.update(nums)
+        for n in nums:
+            pairs[n]+=len(nums)-1
+    # Pair occurrences largely duplicate frequency; use residual against expectation.
+    pair={n:(pairs[n]-5*exposures[n])/max(1,len(history[-150:])) for n in pool}
+    stability={n:-abs(r25[n]-r75[n])-abs(r75[n]-r200[n]) for n in pool}
+    # Conservative reversion discourages extreme short-window estimates.
+    reversion={n:-abs(r25[n]-6/ball_max) for n in pool}
+    factors={'long':long,'recent':recent,'momentum':momentum,'gap':gap,'pair':pair,'stability':stability,'reversion':reversion}
     standardized={k:normalized(v) for k,v in factors.items()}
-    return {n:sum(V32_WEIGHTS[k]*standardized[k][n] for k in V32_WEIGHTS) for n in pool}
+    return {n:sum(V33_WEIGHTS[k]*standardized[k][n] for k in V33_WEIGHTS) for n in pool}
 
-# Backwards-compatible alias for other code importing v29_scores.
-v29_scores=v32_scores
+# Preserve older entry points for compatibility.
+v32_scores=v33_scores
+v29_scores=v33_scores
 
 def predict(history,target,salt='0',ball_max=N):
     if len(history)<12:raise ValueError('At least 12 earlier Main LOTTO draws are required.')
-    scores=v32_scores(history,ball_max)
-    rows=[]
+    scores=v33_scores(history,ball_max)
+    rows=[];usage=Counter()
     for idx in range(5):
-        rng=random.Random(seed_for(target,'v32-'+str(idx),salt))
+        rng=random.Random(seed_for(target,'v33-'+str(idx),salt))
         options=list(range(1,ball_max+1));chosen=[]
-        temperature=(1.4,1.0,.7,.45,.25)[idx]
+        temperature=(1.3,1.05,.85,.65,.5)[idx]
         for _ in range(6):
-            peak=max(scores[n] for n in options)
-            weights=[math.exp(max(-20,(scores[n]-peak)*temperature)) for n in options]
+            peak=max(scores[n]-0.45*usage[n] for n in options)
+            weights=[math.exp(max(-20,(scores[n]-0.45*usage[n]-peak)*temperature)) for n in options]
             pick=rng.choices(options,weights=weights,k=1)[0]
             chosen.append(pick);options.remove(pick)
         row=sorted(chosen)
@@ -219,7 +216,7 @@ def predict(history,target,salt='0',ball_max=N):
             for _ in range(100):
                 row=sorted(rng.sample(range(1,ball_max+1),6))
                 if row not in rows:break
-        rows.append(row)
+        rows.append(row);usage.update(row)
     return rows
 
 def compare(rows,actual):
