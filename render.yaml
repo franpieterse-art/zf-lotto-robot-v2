@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: zf-lotto-robot-v6
+    name: zf-lotto-robot
     runtime: python
     plan: free
     buildCommand: pip install -r requirements.txt
@@ -8,3 +8,5 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: 3.12.8
+      - key: LOTTO_CACHE_SECONDS
+        value: 21600

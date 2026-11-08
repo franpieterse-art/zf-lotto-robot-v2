@@ -1,173 +1,187 @@
-import os, csv, io, json, threading, secrets, re, time
+import csv, io, os, re, time, secrets, threading
 from datetime import date, datetime
 from flask import Flask, request, jsonify, send_from_directory
-from engine import predict, compare, walkforward
 import requests
-from bs4 import BeautifulSoup
+from engine import predict, compare, walkforward
 
 app = Flask(__name__, static_folder='.', static_url_path='')
 LOCK = threading.RLock()
-DRAWS = []
+DRAWS = {}
 SESSIONS = {}
-LAST_SYNC = 0
-SYNC_ERROR = None
-SOURCE = 'https://www.lottery.co.za/lotto/results/'
-DATA_FILE = os.environ.get('LOTTO_DATA_FILE', 'draws.csv')
-# This archive contains the 6/52 era; earlier years used other matrices.
-EARLIEST = date(2026, 6, 1)
+LAST_FETCH = 0
+LAST_ERROR = None
+SOURCE = None
+TTL = int(os.getenv('LOTTO_CACHE_SECONDS', '21600'))
+BETTIP_URL = os.getenv('LOTTO_ARCHIVE_URL', 'https://bettip.co.za/api/v1/lotto/draws.json')
+# BetTip endpoint was advertised but could not be independently verified at build time.
 
-def parse_csv(raw):
-    if isinstance(raw, bytes): raw = raw.decode('utf-8-sig')
-    reader = csv.DictReader(io.StringIO(raw))
-    if not reader.fieldnames or not {'date','n1','n2','n3','n4','n5','n6'}.issubset(reader.fieldnames):
-        raise ValueError('CSV requires date,n1,n2,n3,n4,n5,n6')
-    results = {}
-    for row in reader:
-        day = row['date'].strip()
-        date.fromisoformat(day)
-        nums = sorted(int(row[f'n{i}']) for i in range(1,7))
-        if len(set(nums)) != 6 or not all(1 <= n <= 52 for n in nums):
-            raise ValueError('Invalid 6/52 draw: ' + day)
-        if day in results and results[day] != nums:
-            raise ValueError('Conflicting draw: ' + day)
-        results[day] = nums
-    return [{'date': d, 'numbers': n} for d,n in sorted(results.items())]
+def normalized_date(raw):
+    s = str(raw or '').strip()
+    for fmt in ('%Y-%m-%d','%Y/%m/%d','%d/%m/%Y','%d-%m-%Y'):
+        try: return datetime.strptime(s[:10],fmt).date().isoformat()
+        except ValueError: pass
+    raise ValueError('Unrecognized draw date: '+s[:30])
 
-def merge(new):
-    global DRAWS
+def parse_numbers(record):
+    if isinstance(record,dict):
+        for key in ('numbers','winning_numbers','winningNumbers','main_numbers','mainNumbers','balls','results'):
+            if key in record:
+                val=record[key]
+                if isinstance(val,dict): val=val.get('main',val.get('numbers',[]))
+                if isinstance(val,str): val=re.findall(r'\d+',val)
+                if isinstance(val,list):
+                    val=[(x.get('number') if isinstance(x,dict) else x) for x in val]
+                    return [int(x) for x in val]
+        for prefix in ('n','number','ball'):
+            if all(f'{prefix}{i}' in record for i in range(1,7)):
+                return [int(record[f'{prefix}{i}']) for i in range(1,7)]
+    raise ValueError('Unrecognized number format')
+
+def extract_records(payload):
+    if isinstance(payload,list): return payload
+    if isinstance(payload,dict):
+        for key in ('draws','results','data','lotto','items'):
+            if key in payload:
+                val=payload[key]
+                if isinstance(val,list): return val
+                if isinstance(val,dict): return extract_records(val)
+    raise ValueError('Unknown BetTip archive response shape')
+
+def validate_record(record):
+    if not isinstance(record,dict): raise ValueError('Draw is not an object')
+    # Reject explicitly non-Lotto games, including Lotto Plus and Daily Lotto.
+    game=str(record.get('game',record.get('game_name',record.get('lottery','lotto')))).lower().replace('_',' ').strip()
+    if game not in ('lotto','sa lotto','south african lotto','national lotto','national lottery lotto'):
+        return None
+    day=normalized_date(record.get('date',record.get('draw_date',record.get('drawDate'))))
+    nums=sorted(parse_numbers(record))
+    if len(nums)!=6 or len(set(nums))!=6 or not all(1<=n<=52 for n in nums):
+        raise ValueError('Invalid six-number draw for '+day)
+    # Reject rows whose ruleset is not known to be 6/52. Historical game rules changed.
+    if max(nums)>52: raise ValueError('Out-of-range draw')
+    return day,nums
+
+def parse_archive(raw,content_type=''):
+    text=raw.decode('utf-8-sig') if isinstance(raw,bytes) else raw
+    if 'csv' in content_type or text.lstrip().lower().startswith('date,'):
+        records=list(csv.DictReader(io.StringIO(text)))
+    else:
+        import json
+        records=extract_records(json.loads(text))
+    out={}; bad=0
+    for rec in records:
+        try:
+            item=validate_record(rec)
+            if not item: continue
+            day,nums=item
+            if day in out and out[day]!=nums: raise ValueError('Conflicting results on '+day)
+            out[day]=nums
+        except Exception: bad+=1
+    if not out: raise ValueError('No valid 6/52 Lotto draws found; check the API response format')
+    return out,bad
+
+def load_local():
+    path=os.getenv('LOTTO_DATA_FILE','draws.csv')
+    if not os.path.isfile(path): return
+    with open(path,'rb') as f: rows,_=parse_archive(f.read(),'text/csv')
     with LOCK:
-        all_draws = {d['date']: d['numbers'] for d in DRAWS}
-        for d in new:
-            day = d['date']; nums = d['numbers']
-            if day in all_draws and all_draws[day] != nums:
-                raise ValueError('Source conflict for ' + day + '; refusing to overwrite')
-            all_draws[day] = nums
-        DRAWS = [{'date': d, 'numbers': n} for d,n in sorted(all_draws.items())]
-        return len(DRAWS)
+        DRAWS.update(rows)
+        global SOURCE
+        SOURCE='Local verified CSV (user supplied)'
 
-def scrape_year(year):
-    url = SOURCE + str(year)
-    response = requests.get(url, timeout=20, headers={'User-Agent':'Mozilla/5.0 (compatible; ZFLottoResearch/6.1)'})
-    response.raise_for_status()
-    soup = BeautifulSoup(response.text, 'html.parser')
-    found = {}
-    for tr in soup.select('tr'):
-        cells = tr.find_all(['td','th'], recursive=False)
-        if len(cells) < 3: continue
-        raw_date = cells[0].get_text(' ', strip=True)
-        # Dates on this source are English: Saturday, 7 November 2026.
-        match = re.search(r'\b(\d{1,2})\s+(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{4})\b', raw_date, re.I)
-        if not match: continue
-        draw_date = datetime.strptime(' '.join(match.groups()), '%d %B %Y').date()
-        if draw_date < EARLIEST or draw_date > date.today() or draw_date.year != year: continue
-        # Third cell contains the seven lottery balls (six main + bonus).
-        results_text = cells[2].get_text(' ', strip=True)
-        balls = [int(x) for x in re.findall(r'(?<!\d)\d{1,2}(?!\d)', results_text)]
-        if len(balls) != 7: continue
-        main = sorted(balls[:6])
-        if len(set(main)) != 6 or not all(1 <= n <= 52 for n in main): continue
-        found[draw_date.isoformat()] = main
-    if not found:
-        raise ValueError(f'No usable 6/52 rows parsed from {url}; website structure may have changed')
-    return [{'date': d, 'numbers': n} for d,n in sorted(found.items())]
+try: load_local()
+except Exception as exc: LAST_ERROR='Local archive: '+str(exc)
 
-def sync(force=False):
-    global LAST_SYNC, SYNC_ERROR
+def refresh(force=False):
+    global LAST_FETCH,LAST_ERROR,SOURCE
     with LOCK:
-        if not force and DRAWS and time.time()-LAST_SYNC < 21600: return len(DRAWS)
-        # Reserve the refresh window to avoid simultaneous requests.
-        LAST_SYNC = time.time()
+        if not force and LAST_FETCH and time.time()-LAST_FETCH<TTL: return
+        # Avoid repeated failing requests on every page load.
+        LAST_FETCH=time.time()
     try:
-        combined = []
-        errors = []
-        for year in range(EARLIEST.year, date.today().year+1):
-            try: combined.extend(scrape_year(year))
-            except Exception as e: errors.append(str(e))
-        if not combined:
-            raise ValueError('; '.join(errors) or 'No results found')
-        count = merge(combined)
-        SYNC_ERROR = '; '.join(errors) if errors else None
-        return count
-    except Exception as e:
-        SYNC_ERROR = str(e)
-        raise
+        if not BETTIP_URL.startswith('https://'): raise ValueError('Archive URL must be HTTPS')
+        resp=requests.get(BETTIP_URL,headers={'Accept':'application/json,text/csv','User-Agent':'ZF-Lotto-Robot/7.0'},timeout=(7,18))
+        resp.raise_for_status()
+        if len(resp.content)>12_000_000: raise ValueError('Archive exceeds 12MB safety limit')
+        rows,bad=parse_archive(resp.content,resp.headers.get('Content-Type',''))
+        with LOCK:
+            for day,nums in rows.items():
+                if day in DRAWS and DRAWS[day]!=nums:
+                    raise ValueError('Source conflict for '+day+'; refusing to overwrite existing result')
+            DRAWS.update(rows)
+            LAST_ERROR=None
+            SOURCE='BetTip archive (unverified third-party provider)'
+    except Exception as exc:
+        with LOCK: LAST_ERROR=f'{type(exc).__name__}: {str(exc)[:250]}'
 
-if os.path.isfile(DATA_FILE):
-    with open(DATA_FILE,'rb') as f: merge(parse_csv(f.read()))
+def snapshot():
+    with LOCK: return [{'date':d,'numbers':nums} for d,nums in sorted(DRAWS.items())]
 
 @app.get('/')
-def home(): return send_from_directory('.', 'index.html')
+def home(): return send_from_directory('.','index.html')
 
 @app.get('/api/status')
 def status():
-    try: sync()
-    except Exception: pass
-    with LOCK:
-        return jsonify(draws=len(DRAWS), first=DRAWS[0]['date'] if DRAWS else None,
-                       last=DRAWS[-1]['date'] if DRAWS else None,
-                       online_provider_configured=True, source=SOURCE,
-                       sync_error=SYNC_ERROR)
+    refresh()
+    ds=snapshot()
+    with LOCK: err=LAST_ERROR; src=SOURCE; last=LAST_FETCH
+    return jsonify(draws=len(ds),first=ds[0]['date'] if ds else None,last=ds[-1]['date'] if ds else None,provider='BetTip',online_provider_configured=True,source=src,fetch_error=err,cache_age_seconds=round(time.time()-last) if last else None)
 
-@app.post('/api/sync')
-def manual_sync():
-    try: return jsonify(draws=sync(force=True), source=SOURCE, warning=SYNC_ERROR)
-    except Exception as e: return jsonify(error=str(e)), 502
+@app.post('/api/refresh')
+def refresh_endpoint():
+    refresh(force=True)
+    return status()
 
 @app.post('/api/import')
-def import_draws():
-    f = request.files.get('file')
-    if not f: return jsonify(error='CSV file required'),400
+def import_csv():
+    f=request.files.get('file')
+    if not f: return jsonify(error='CSV required'),400
     try:
-        rows = parse_csv(f.read())
-        return jsonify(imported=len(rows), total=merge(rows))
-    except Exception as e: return jsonify(error=str(e)),400
+        rows,_=parse_archive(f.read(),'text/csv')
+        with LOCK:
+            for d,nums in rows.items():
+                if d in DRAWS and DRAWS[d]!=nums: raise ValueError('Conflicting result: '+d)
+            DRAWS.update(rows)
+        return jsonify(imported=len(rows),total=len(DRAWS))
+    except Exception as e:return jsonify(error=str(e)),400
 
 @app.post('/api/predict')
 def prediction():
-    p = request.get_json(silent=True) or {}
-    day = p.get('date','')
-    try: target = date.fromisoformat(day)
-    except (ValueError,TypeError): return jsonify(error='Invalid date'),400
-    if target >= date.today(): return jsonify(error='Choose a previous draw date'),400
-    if target < EARLIEST: return jsonify(error='This version supports the 6/52 era from June 2026 onward; older Lotto matrices must be handled separately.'),400
-    try: sync()
-    except Exception as e:
-        with LOCK:
-            if not DRAWS: return jsonify(error='Historical download failed: '+str(e)),502
-    with LOCK: history = [d for d in DRAWS if d['date'] < day]
-    try: rows = predict(history, day, str(p.get('reset',0)))
-    except ValueError as e: return jsonify(error=str(e)+' Available earlier draws: '+str(len(history))),400
-    token = secrets.token_urlsafe(24)
+    p=request.get_json(silent=True) or {}; day=p.get('date','')
+    try: date.fromisoformat(day)
+    except (ValueError,TypeError):return jsonify(error='Choose a valid date'),400
+    if day>=date.today().isoformat():return jsonify(error='Choose a previous draw date'),400
+    refresh()
+    history=[d for d in snapshot() if d['date']<day]
+    try: rows=predict(history,day,str(p.get('reset',0)))
+    except ValueError as exc:
+        return jsonify(error=str(exc)+' Historical archive may be unavailable. Check Data Status.'),400
+    token=secrets.token_urlsafe(32)
     with LOCK:
-        SESSIONS[token] = {'date':day,'rows':rows}
         if len(SESSIONS)>1000: SESSIONS.pop(next(iter(SESSIONS)))
+        SESSIONS[token]={'date':day,'rows':rows}
     return jsonify(token=token,date=day,rows=rows,training_draws=len(history))
 
 @app.post('/api/reveal')
 def reveal():
-    token = (request.get_json(silent=True) or {}).get('token','')
-    with LOCK: session = SESSIONS.get(token)
-    if not session: return jsonify(error='Predict first'),400
-    day = session['date']
-    with LOCK: actual = next((d['numbers'] for d in DRAWS if d['date']==day),None)
+    token=(request.get_json(silent=True) or {}).get('token','')
+    with LOCK: sess=SESSIONS.get(token)
+    if not sess:return jsonify(error='Predict first'),400
+    day=sess['date']
+    with LOCK: actual=DRAWS.get(day)
     if actual is None:
-        try: sync(force=True)
-        except Exception as e: return jsonify(error='Result lookup failed: '+str(e)),502
-        with LOCK: actual = next((d['numbers'] for d in DRAWS if d['date']==day),None)
-    if actual is None: return jsonify(error='No verified result available for selected date; no numbers invented.'),404
-    return jsonify(date=day,actual=actual,source=SOURCE,comparison=compare(session['rows'],actual))
+        refresh(force=True)
+        with LOCK: actual=DRAWS.get(day)
+    if actual is None:return jsonify(error='No verified winning result found for this date. It may be a non-draw date or the archive is incomplete. No result was invented.'),404
+    return jsonify(date=day,actual=actual,source=SOURCE or 'Historical archive',comparison=compare(sess['rows'],actual))
 
 @app.post('/api/backtest')
 def backtest():
-    p = request.get_json(silent=True) or {}
+    p=request.get_json(silent=True) or {}
     try: limit=max(1,min(500,int(p.get('limit',100))))
-    except (ValueError,TypeError): return jsonify(error='Invalid limit'),400
-    try: sync()
-    except Exception as e:
-        with LOCK:
-            if not DRAWS: return jsonify(error='Historical download failed: '+str(e)),502
-    with LOCK: draws=list(DRAWS)
-    return jsonify(walkforward(draws,p.get('start'),p.get('end'),limit))
+    except (ValueError,TypeError):return jsonify(error='Invalid limit'),400
+    refresh()
+    # The engine trains on only prior draws. Data must be checked for completeness.
+    return jsonify(walkforward(snapshot(),p.get('start'),p.get('end'),limit))
 
-if __name__ == '__main__':
-    app.run(host='0.0.0.0',port=int(os.environ.get('PORT','10000')))
+if __name__=='__main__': app.run(host='0.0.0.0',port=int(os.getenv('PORT','10000')))

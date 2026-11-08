@@ -1,9 +1,17 @@
-# ZF Lotto Robot V6 automatic history patch
-Replace **server.py** and **requirements.txt** in the existing GitHub repository. Keep your existing `engine.py` and `index.html` unchanged.
+# ZF Lotto Robot V7 — BetTip integration (candidate)
 
-Render build: `pip install -r requirements.txt`
-Render start: `gunicorn server:app --bind 0.0.0.0:$PORT --timeout 120`
+This replaces V6 while retaining the five strategies, blind Predict -> Reveal -> Compare, reset, and chronological backtesting.
 
-The server attempts to load 2026+ results from https://www.lottery.co.za/lotto/results/2026 (and later years), using the first six balls only. It does not use a private API key. Third-party website structure or access restrictions may break extraction; `/api/status` returns `sync_error` if so. Archive is cached in memory for six hours and repopulated after restart. `/api/sync` forces refresh. A saved verified `draws.csv` remains supported as a fallback. Dates before June 2026 are deliberately blocked until rule-era handling is added; 2025 draws used a different number matrix. Results from the external archive are not independently certified as official. Predictions are not guaranteed to outperform chance.
+## Important provider warning
+The advertised BetTip endpoint `https://bettip.co.za/api/v1/lotto/draws.json` could not be reached or independently validated in the build environment. The code attempts this endpoint, checks HTTPS, validates six unique numbers and dates, caches the archive for six hours, and displays errors instead of fabricating results. Its actual JSON schema and historical coverage have NOT been confirmed. If the API is unavailable or has a different schema, use a verified `draws.csv` archive or configure `LOTTO_ARCHIVE_URL` to a trusted compatible JSON/CSV archive. Data from earlier game formats must be reviewed: the current validator checks number bounds, not historical game rules.
 
-The UI has not been modified. This patch has been syntax checked and parser-tested against representative HTML, but a live request from Render has not yet been tested.
+## GitHub
+Upload `server.py`, `engine.py`, `index.html`, `requirements.txt`, `render.yaml` and README to repository root. Do not upload `__pycache__` or `.pyc` files. Optional `draws.csv` with columns `date,n1,n2,n3,n4,n5,n6` provides persistent fallback.
+
+## Render Web Service
+Build: `pip install -r requirements.txt`
+Start: `gunicorn server:app --bind 0.0.0.0:$PORT --timeout 120`
+Python: 3.12.8. No API key is used for BetTip.
+
+## Limitations
+The six-number match percentage is descriptive, not a winning probability. Random lottery outcomes are not predictably improved by historical patterns. Five strategies are preserved from V6; its 'pairs/triplets' row actually uses pair statistics, not triplet counts. Backtesting requires trustworthy, chronological and complete data. Render's in-memory cache resets on restart; for persistent history commit a verified draws.csv file.
