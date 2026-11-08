@@ -1,1 +1,2 @@
-# No third-party dependencies
+Flask>=3.0,<4
+gunicorn>=22,<24

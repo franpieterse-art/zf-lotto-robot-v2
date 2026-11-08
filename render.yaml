@@ -1,7 +1,10 @@
 services:
   - type: web
-    name: zf-lotto-robot-v5
+    name: zf-lotto-robot-v6
     runtime: python
     plan: free
     buildCommand: pip install -r requirements.txt
-    startCommand: python server.py
+    startCommand: gunicorn server:app --bind 0.0.0.0:$PORT --timeout 120
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.8
