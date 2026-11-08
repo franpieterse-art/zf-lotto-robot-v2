@@ -394,7 +394,7 @@ def prediction():
         SESSIONS[token]={'date':day,'rows':rows}
     _,best_window,validation=adaptive_window_scores(history,training_era(day)[2])
     _,models,model_validation,_=selected_model_scores(history,training_era(day)[2])
-    return jsonify(token=token,date=day,rows=rows,training_draws=len(history),all_numbers_allowed=True,adaptive_window=best_window,adaptive_validation=validation,selected_models=models,model_validation=model_validation,limited_history=len(history)<25)
+    return jsonify(token=token,date=day,rows=rows,training_draws=len(history),all_numbers_allowed=True,eligible_numbers=list(range(1,training_era(day)[2]+1)),adaptive_window=best_window,adaptive_validation=validation,selected_models=models,model_validation=model_validation,limited_history=len(history)<25)
 
 @app.post('/api/reveal')
 def reveal():
