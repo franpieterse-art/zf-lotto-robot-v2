@@ -1,7 +1,17 @@
-# ZF Lotto Robot V25 — Seven experimental research methods
+# ZF Lotto Robot V21 — All Previous Historical Results
 
-Built from V24 with all uploaded historical CSV files retained. Five prediction rows are chosen from seven models: Markov-style transitions, Bayesian smoothing, momentum, multi-window rank stability, historical triplet support, Monte Carlo sampling, and adaptive-window frequency. Each model is scored on up to eight **earlier** completed draws, then five are selected for the target date. No selected-date or later results are used for prediction. The same selected rows are compared to Main Lotto, Lotto Plus 1, and the correctly labelled Plus 2 / Lotto 5 Max third panel after Reveal.
+Built from V20. All five strategies, all numbers eligible, Predict → Reveal → Compare, three result panels, and historical CSV are retained.
 
-All valid numbers remain eligible. Historical data still comes from user-uploaded CSV files and cached sources. The existing historical game-era logic is retained. Model validation is exploratory and may overfit; no predictive advantage over random selection has been established. For a fair 6/52 game each combination has jackpot odds of 1 in 20,358,520.
+## Change requested
+For any chosen historical prediction date, use **every stored verified Main LOTTO result before that date**, including older game-rule periods. The previous same-era date restriction has been removed. Never include the chosen draw or any later result in prediction or walk-forward training.
 
-Deploy the ten files to the GitHub repository root. Render build: `pip install -r requirements.txt`; start: `gunicorn server:app --bind 0.0.0.0:$PORT --timeout 120`.
+The valid prediction number range still follows the selected draw date's game rules. Older draws may have different ball pools (e.g., 6/58 vs 6/52), so the engine only scores eligible numbers in the current pool. Cross-era frequencies can be biased; using more draws does **not** guarantee improved prediction quality. The archive's completeness and rule boundaries require independent verification.
+
+No external API request occurs during Predict. Use Retry Historical Download to refresh data separately.
+
+## Install
+Upload the eight files from this ZIP to the GitHub repository root, replacing V20. Render build: `pip install -r requirements.txt`; start: `gunicorn server:app --bind 0.0.0.0:$PORT --timeout 120`.
+
+
+## V22 hot/cold exclusion
+Each Predict and walk-forward backtest uses all locally stored verified Main Lotto draws strictly before the target date. Within the target game's valid ball range, the five most frequent and five least frequent numbers are excluded from every predicted row. Ties are deterministic; cold and hot groups do not overlap. The API returns `excluded_hot` and `excluded_cold`. This is an experimental filter and does not increase the probability of winning a fair draw.

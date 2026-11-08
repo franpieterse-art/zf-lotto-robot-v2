@@ -63,6 +63,18 @@ def hottest_numbers(history, count=5, ball_max=N):
     return sorted(range(1,ball_max+1), key=lambda n:(-counts[n],gaps[n],n))[:count]
 
 
+def excluded_extremes(history, ball_max=N, count=5):
+    """Rank by frequency across ALL earlier draws, within target ball range.
+    Hot ties prefer recently drawn; cold ties prefer longest absent.
+    Groups are disjoint, always exactly 2*count eligible balls.
+    """
+    if not history: raise ValueError('Historical results required to rank hot/cold numbers.')
+    counts=Counter(n for d in history for n in d['numbers'] if 1 <= n <= ball_max)
+    gaps={n:next((i for i,d in enumerate(reversed(history)) if n in d['numbers']),len(history)) for n in range(1,ball_max+1)}
+    hot=sorted(range(1,ball_max+1),key=lambda n:(-counts[n],gaps[n],n))[:count]
+    cold=sorted((n for n in range(1,ball_max+1) if n not in hot),key=lambda n:(counts[n],-gaps[n],n))[:count]
+    return sorted(hot),sorted(cold)
+
 def adaptive_window_scores(history, ball_max=N):
     """Select lookback by walk-forward validation strictly before target."""
     windows=(10,25,50,100,200)
@@ -80,87 +92,23 @@ def adaptive_window_scores(history, ball_max=N):
     counts=Counter(n for d in history[-best:] for n in d['numbers'])
     return {n:counts[n]/max(1,min(best,len(history))) for n in range(1,ball_max+1)},best,scores
 
-def experimental_scores(history, ball_max=N):
-    """Seven past-only, exploratory statistical models (not calibrated probabilities)."""
-    pool=range(1,ball_max+1)
-    past=[set(n for n in d['numbers'] if n<=ball_max) for d in history]
-    total=len(past)
-    windows=(10,30,100,200)
-    counts={w:Counter(n for d in past[-w:] for n in d) for w in windows}
-    # 1. Markov-style transition associations, with smoothing.
-    previous=past[-1]
-    transition=Counter(); occurrences=Counter()
-    for a,b in zip(past[:-1],past[1:]):
-        for n in a: occurrences[n]+=1
-        for n in b:
-            transition[n]+=sum(1/max(1,occurrences[x]) for x in a if x in previous)
-    markov={n:transition[n]/max(1,total) for n in pool}
-    # 2. Beta-Binomial posterior mean, with uniform lottery prior.
-    overall=Counter(n for d in past for n in d)
-    bayes={n:(overall[n]+6)/(total+ball_max) for n in pool}
-    # 3. Momentum of recent versus medium-term frequency.
-    momentum={n:counts[10][n]/max(1,min(10,total))-counts[100][n]/max(1,min(100,total)) for n in pool}
-    # 4. Rank stability across different windows.
-    rankings={w:{n:i for i,n in enumerate(sorted(pool,key=lambda n:(-counts[w][n],n)))} for w in windows}
-    stability={n:-sum(rankings[w][n] for w in windows)/len(windows) for n in pool}
-    # 5. Triplet association support from earlier draws.
-    triples=Counter()
-    from itertools import combinations
-    for d in past[-150:]:
-        for tri in combinations(sorted(d),3):triples[tri]+=1
-    triplet={n:sum(c for tri,c in triples.items() if n in tri)/max(1,min(total,150)) for n in pool}
-    # 6. Monte Carlo: smoothed frequency distribution, sampled reproducibly.
-    rng=random.Random(seed_for(history[-1]['date'] if history else '', 'monte-carlo'))
-    weights=[overall[n]+6 for n in pool]
-    simulated=Counter()
-    for _ in range(250):
-        choices=list(pool); w=weights[:]
-        for _ in range(min(6,len(choices))):
-            picked=rng.choices(range(len(choices)),weights=w,k=1)[0]
-            simulated[choices.pop(picked)]+=1;w.pop(picked)
-    monte={n:simulated[n]/250 for n in pool}
-    # 7. Adaptive rolling-window frequency model (validated separately).
-    adaptive,window,_=adaptive_window_scores(history,ball_max)
-    return [markov,bayes,momentum,stability,triplet,monte,adaptive],window
-
-
-def normalized(scores):
-    values=list(scores.values());mean=sum(values)/len(values)
-    sd=(sum((v-mean)**2 for v in values)/len(values))**.5 or 1
-    return {n:(v-mean)/sd for n,v in scores.items()}
-
-
-def selected_model_scores(history, ball_max=N):
-    """Select the five best past-validated methods, with no target leakage."""
-    scores,window=experimental_scores(history,ball_max)
-    # Validation strictly within history; train each model on draws preceding its validation draw.
-    # Limit validation to 8 completed draws to keep Render response time bounded.
-    validation=Counter()
-    if len(history)>=30:
-        for i in range(max(20,len(history)-8),len(history)):
-            prior=history[:i]
-            # Score first six inexpensive methods on their past-only history.
-            candidate,_=experimental_scores(prior,ball_max)
-            actual=set(history[i]['numbers'])
-            for j,sc in enumerate(candidate):
-                top=sorted(sc,key=lambda n:(-sc[n],n))[:6]
-                validation[j]+=len(actual.intersection(top))
-    # Choose top five, with stable deterministic tie-breaking.
-    selected=sorted(range(7),key=lambda j:(-validation[j],j))[:5]
-    return [scores[j] for j in selected],selected,dict(validation),window
-
-
 def predict(history, target, salt='0', ball_max=N):
     if len(history)<12:raise ValueError('At least 12 earlier verified Main LOTTO draws are needed to predict.')
-    sets,selected,_,_=selected_model_scores(history,ball_max)
+    hot,cold=excluded_extremes(history,ball_max)
+    excluded=set(hot+cold)
+    sets,pairs=score_sets(history,ball_max)
+    adaptive,_,_=adaptive_window_scores(history,ball_max)
+    sets[4]=adaptive
     out=[]
     for idx, scores in enumerate(sets):
         rng=random.Random(seed_for(target,idx,salt)); chosen=[]
-        z=normalized(scores)
         for _ in range(6):
-            options=[n for n in range(1,ball_max+1) if n not in chosen]
-            peak=max(z[n] for n in options)
-            weights=[math.exp(max(-20,min(20,(z[n]-peak)*.7))) for n in options]
+            options=[n for n in range(1,ball_max+1) if n not in chosen and n not in excluded]
+            vals=[]
+            for n in options:
+                pbonus=sum(pairs.get(tuple(sorted((n,x))),0) for x in chosen)
+                vals.append(scores[n]+(pbonus*0.025 if idx==2 else 0))
+            peak=max(vals); weights=[math.exp(max(-30,min(30,(v-peak)*1.3))) for v in vals]
             chosen.append(rng.choices(options,weights=weights,k=1)[0])
         out.append(sorted(chosen))
     return out
@@ -177,15 +125,15 @@ def walkforward(draws,start=None,end=None,limit=200,era_fn=None):
         if end and day>end:continue
         if era_fn:
             lo,hi,ball_max=era_fn(day)
-            history=[d for d in draws if lo<=d['date']<day and max(d['numbers'])<=ball_max]
+            history=[d for d in draws if d['date']<day]
         else:
             ball_max=N
             history=[d for d in draws if d['date']<day]
         if len(history)<12:continue
-        results.append({'date':day,'actual':target['numbers'],'rows':compare(predict(history,day,ball_max=ball_max),target['numbers']),'training_draws':len(history),'number_range':ball_max})
+        results.append({'date':day,'actual':target['numbers'],'rows':compare(predict(history,day,ball_max=ball_max),target['numbers']),'training_draws':len(history),'number_range':ball_max,'excluded_hot':excluded_extremes(history,ball_max)[0],'excluded_cold':excluded_extremes(history,ball_max)[1]})
         if len(results)>=limit:break
     summary=[]
     for j in range(5):
         counts=[r['rows'][j]['count'] for r in results]
-        summary.append({'strategy':'Adaptive research row '+str(j+1), 'mean_matches':round(sum(counts)/len(counts),3) if counts else None,'three_plus':sum(c>=3 for c in counts),'four_plus':sum(c>=4 for c in counts),'histogram':{str(k):counts.count(k) for k in range(7)}})
+        summary.append({'strategy':['Frequency / recency','Hot / cold + gaps','Pairs / triplets','Online machine learning','Adaptive rolling-window (V16)'][j], 'mean_matches':round(sum(counts)/len(counts),3) if counts else None,'three_plus':sum(c>=3 for c in counts),'four_plus':sum(c>=4 for c in counts),'histogram':{str(k):counts.count(k) for k in range(7)}})
     return {'tested':len(results),'summary':summary,'results':results}
