@@ -154,47 +154,59 @@ def selected_model_scores(history, ball_max=N):
 # No score is a calibrated winning probability.
 V29_WEIGHTS={'long_frequency':.20,'recent_frequency':.20,'momentum':.15,'gap':.10,'pairing':.15,'stability':.20}
 
-def v29_scores(history,ball_max=N):
+# V32: smoothed multi-horizon ensemble. Scores are NOT winning probabilities.
+V32_WEIGHTS={'long':.25,'recent':.25,'momentum':.15,'gap':.05,'pair':.15,'stability':.15}
+
+def v32_scores(history,ball_max=N):
     from itertools import combinations
     pool=range(1,ball_max+1)
-    # Historical draws are chronological and strictly earlier than the target.
-    # Only count a ball on dates when it was eligible under the historical format.
-    all_counts=Counter(); eligible=Counter()
+    if not history: return {n:0.0 for n in pool}
+    # Historical eligibility: numbers 50+ did not exist in 6/49 draws.
+    eligible=Counter()
+    counts=Counter()
     for d in history:
-        balls=set(d['numbers'])
-        observed_max=max(balls) if balls else 0
-        # Conservative historic range approximation; avoids penalizing 50+ in 6/49 era.
-        year=int(d['date'][:4]); historical_max=49 if year<2017 else (58 if d['date']<'2026-06-01' else 52)
-        for n in pool:
-            if n<=historical_max:eligible[n]+=1
-        all_counts.update(n for n in balls if n<=ball_max)
-    recent=Counter(n for d in history[-30:] for n in d['numbers'] if n<=ball_max)
-    medium=Counter(n for d in history[-100:] for n in d['numbers'] if n<=ball_max)
+        historical_max=49 if d['date']<'2017-01-01' else (58 if d['date']<'2026-06-01' else 52)
+        eligible.update(n for n in pool if n<=historical_max)
+        counts.update(n for n in d['numbers'] if n in pool)
+    def rate(window):
+        draws=history[-window:]
+        occ=Counter(n for d in draws for n in d['numbers'] if n in pool)
+        exposures=Counter()
+        for d in draws:
+            maximum=49 if d['date']<'2017-01-01' else (58 if d['date']<'2026-06-01' else 52)
+            exposures.update(n for n in pool if n<=maximum)
+        # Shrink toward uniform expectation: short samples should not dominate.
+        return {n:(occ[n]+12*6/ball_max)/(exposures[n]+12) for n in pool}
+    r20=rate(20);r60=rate(60);r150=rate(150)
+    long={n:(counts[n]+30*6/ball_max)/(eligible[n]+30) for n in pool}
+    recent={n:.50*r20[n]+.30*r60[n]+.20*r150[n] for n in pool}
+    momentum={n:r20[n]-r150[n] for n in pool}
+    gap={}
+    for n in pool:
+        # Gap is a descriptive signal, not evidence a number is 'due'.
+        last=next((i for i,d in enumerate(reversed(history)) if n in d['numbers']),len(history))
+        gap[n]=min(last,40)/40
+    # Pair score uses smoothed support, without treating co-occurrence as causation.
     pair=Counter()
     for d in history[-100:]:
-        for a,b in combinations(sorted(n for n in d['numbers'] if n<=ball_max),2):
-            pair[a]+=1;pair[b]+=1
-    last_seen={n:len(history) for n in pool}
-    for gap,d in enumerate(reversed(history)):
-        for n in d['numbers']:
-            if n in last_seen and last_seen[n]==len(history):last_seen[n]=gap
-    factors={
-      'long_frequency':{n:(all_counts[n]+2)/(eligible[n]+2*ball_max/6) for n in pool},
-      'recent_frequency':{n:(recent[n]+1)/(min(30,len(history))+ball_max/6) for n in pool},
-      'momentum':{n:recent[n]/max(1,min(30,len(history)))-medium[n]/max(1,min(100,len(history))) for n in pool},
-      'gap':{n:min(last_seen[n],60)/60 for n in pool},
-      'pairing':{n:pair[n]/max(1,min(100,len(history))) for n in pool},
-      'stability':{n:-(abs(recent[n]/max(1,min(30,len(history)))-all_counts[n]/max(1,eligible[n]))) for n in pool},
-    }
-    z={k:normalized(v) for k,v in factors.items()}
-    return {n:sum(w*z[k][n] for k,w in V29_WEIGHTS.items()) for n in pool}
+        for x,y in combinations(sorted(n for n in d['numbers'] if n in pool),2):
+            pair[x]+=1;pair[y]+=1
+    pairing={n:(pair[n]+5)/(min(100,len(history))+5) for n in pool}
+    stability={n:-abs(r20[n]-r60[n])-abs(r60[n]-r150[n]) for n in pool}
+    factors={'long':long,'recent':recent,'momentum':momentum,
+             'gap':gap,'pair':pairing,'stability':stability}
+    standardized={k:normalized(v) for k,v in factors.items()}
+    return {n:sum(V32_WEIGHTS[k]*standardized[k][n] for k in V32_WEIGHTS) for n in pool}
+
+# Backwards-compatible alias for other code importing v29_scores.
+v29_scores=v32_scores
 
 def predict(history,target,salt='0',ball_max=N):
     if len(history)<12:raise ValueError('At least 12 earlier Main LOTTO draws are required.')
-    scores=v29_scores(history,ball_max)
+    scores=v32_scores(history,ball_max)
     rows=[]
     for idx in range(5):
-        rng=random.Random(seed_for(target,'v30-'+str(idx),salt))
+        rng=random.Random(seed_for(target,'v32-'+str(idx),salt))
         options=list(range(1,ball_max+1));chosen=[]
         temperature=(1.4,1.0,.7,.45,.25)[idx]
         for _ in range(6):
@@ -228,5 +240,5 @@ def walkforward(draws,start=None,end=None,limit=100,era_fn=None):
     summary=[]
     for j in range(5):
         counts=[r['rows'][j]['count'] for r in results]
-        summary.append({'strategy':'V30 formula row '+str(j+1),'mean_matches':round(sum(counts)/len(counts),3) if counts else None,'three_plus':sum(c>=3 for c in counts),'four_plus':sum(c>=4 for c in counts),'histogram':{str(k):counts.count(k) for k in range(7)}})
+        summary.append({'strategy':'V32 formula row '+str(j+1),'mean_matches':round(sum(counts)/len(counts),3) if counts else None,'three_plus':sum(c>=3 for c in counts),'four_plus':sum(c>=4 for c in counts),'histogram':{str(k):counts.count(k) for k in range(7)}})
     return {'tested':len(results),'summary':summary,'results':results}

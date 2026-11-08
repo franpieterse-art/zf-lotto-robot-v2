@@ -1,11 +1,8 @@
-# ZF Lotto Robot V30 — six-factor formula integrated
+# ZF Lotto Robot V32 — Improved Formula
+V32 uses all eligible numbers and a six-factor, smoothed ensemble:
+long-term frequency 25%, multi-horizon recent frequency 25%, momentum 15%, gap 5%, pair co-occurrence 15%, stability 15%.
 
-Formula: S(n) = 0.20 LongFrequency + 0.20 RecentFrequency + 0.15 Momentum + 0.10 Gap + 0.15 Pairing + 0.20 TrendStability. Components are min-max normalized to a 0–1 scale.
+Changes: Bayesian-style smoothing, 20/60/150 draw lookbacks, historical number eligibility, deterministic five unique prediction rows, local-only Predict/Reveal/Backtest (no network waiting), date-based walk-forward testing with past-only data. No draw result is fabricated.
 
-All eligible numbers remain available, with no hottest/coldest exclusions. Five unique rows are generated using historical Main Lotto draws strictly before the selected date. Predict, Reveal, Compare and walk-forward Backtest remain available. Local historical CSV files are bundled. Results from different games are stored separately; missing results are not invented.
-
-Deploy to Render: build `pip install -r requirements.txt`, start `gunicorn server:app --bind 0.0.0.0:$PORT --timeout 120`.
-
-The formula is experimental and does not improve the mathematical odds of a fair lottery. Verify historical archives and game rule changes before drawing conclusions.
-
-V31 FIX: repaired fatal JavaScript syntax error in Predict click handler (unterminated string). Browser now loads handlers. No formula changes.
+Install: Extract ZIP, replace repository files, commit, redeploy Render, Ctrl+F5.
+No formula can reliably predict an independent fair lottery draw. Backtest against random selections before claiming improvement.
