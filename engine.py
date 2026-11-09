@@ -81,15 +81,19 @@ def evaluate(tickets,actual):
     matches=[len(set(t)&set(actual)) for t in tickets]
     return {'best':max(matches),'matches':matches,'three_plus':int(max(matches)>=3),'four_plus':int(max(matches)>=4),'five_plus':int(max(matches)>=5)}
 
-def learn(history,upto,min_train=40):
+def learn(history,upto,min_train=40, cached_results=None):
     methods=('weighted','hot','cold','overdue','momentum')
     # Select weights using strictly earlier outcomes; no access to test draw.
     start=max(min_train,upto-120); totals={m:0.0 for m in methods}; tested=0
     for i in range(start,upto):
         train=history[:i]; actual=history[i]['numbers']; tested+=1
         for m in methods:
-            result=evaluate(predict(train,m,seed_for(history[i]['date'],m)),actual)
-            totals[m]+=result['best']+3*result['four_plus']+result['three_plus']
+            if cached_results is not None and (i,m) in cached_results:
+                value=cached_results[(i,m)]
+            else:
+                result=evaluate(predict(train,m,seed_for(history[i]['date'],m)),actual)
+                value=result['best']+3*result['four_plus']+result['three_plus']
+            totals[m]+=value
     if not tested:return {m:1/len(methods) for m in methods}
     raw={m:max(.01,totals[m]/tested) for m in methods}; z=sum(raw.values())
     return {m:v/z for m,v in raw.items()}
@@ -100,8 +104,18 @@ def backtest(history,start_date=None,end_date=None,min_train=40,limit=150):
     indices=indices[-limit:]
     if not indices:raise ValueError('No eligible draws in selected date range')
     methods=['random','weighted','hot','cold','overdue','momentum','adaptive']; stats={m:{'draws':0,'total_best':0,'three_plus':0,'four_plus':0,'five_plus':0} for m in methods}; detail=[]
+    # Precompute each prior outcome once, instead of recalculating the same
+    # 120-draw training window for every backtest target.
+    cached_results={}
+    first=max(min_train,indices[0]-120)
+    base_methods=('weighted','hot','cold','overdue','momentum')
+    for j in range(first,indices[-1]):
+        past=history[:j]; actual=history[j]['numbers']; date=history[j]['date']
+        for m in base_methods:
+            r=evaluate(predict(past,m,seed_for(date,m)),actual)
+            cached_results[(j,m)]=r['best']+3*r['four_plus']+r['three_plus']
     for i in indices:
-        target=history[i]; train=history[:i]; weights=learn(history,i,min_train) if i>=min_train+5 else None
+        target=history[i]; train=history[:i]; weights=learn(history,i,min_train,cached_results) if i>=min_train+5 else None
         rec={'date':target['date'],'actual':target['numbers'],'results':{}}
         for m in methods:
             tickets=predict(train,m,seed_for(target['date'],m),weights=weights)

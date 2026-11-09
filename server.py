@@ -43,4 +43,7 @@ def run_backtest():
     data=request.get_json() or {}
     try:return jsonify(backtest(history(),data.get('start'),data.get('end'),limit=min(300,max(1,int(data.get('limit',60))))))
     except (ValueError,TypeError) as e:return jsonify(error=str(e)),400
+    except Exception:
+        app.logger.exception('Backtest failed')
+        return jsonify(error='Backtest failed on the server. Check Render Logs for the traceback.'),500
 if __name__=='__main__':app.run(host='0.0.0.0',port=int(os.environ.get('PORT',5000)))
