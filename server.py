@@ -4,6 +4,7 @@ from flask import Flask, request, jsonify, send_from_directory
 import requests
 import storage
 from engine import predict, compare, walkforward, v29_scores, prediction_diagnostics, _learned_weights, feedback_repredict, predict_learned, learning_update
+from evaluation import evaluate
 
 app = Flask(__name__, static_folder='.', static_url_path='')
 LOCK = threading.RLock()
@@ -461,6 +462,21 @@ def learn_repredict():
                    comparisons=compare(updated,actual),
                    diagnostics=prediction_diagnostics(training_history(day),updated,actual,training_era(day)[2]),
                    hindsight=True,warning='These revised rows use the revealed winning numbers. They are retrospective experiments, NOT valid blind predictions or evidence of improved future accuracy.')
+
+@app.post('/api/evaluate')
+def evaluate_learning():
+    p=request.get_json(silent=True) or {}
+    try:
+        limit=max(1,min(100,int(p.get('limit',30))))
+        report=evaluate(snapshot(),training_era,limit=limit)
+        storage.save_evaluation(report)
+        return jsonify(report)
+    except (ValueError,TypeError) as exc:
+        return jsonify(error=str(exc)),400
+
+@app.get('/api/evaluation-history')
+def evaluation_history():
+    return jsonify(reports=storage.load_evaluations(10))
 
 @app.post('/api/backtest')
 def backtest():

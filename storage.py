@@ -40,3 +40,16 @@ def count_lessons():
     with LOCK,connect() as con:
         con.execute('CREATE TABLE IF NOT EXISTS lessons(day TEXT PRIMARY KEY, payload TEXT NOT NULL)')
         return con.execute('SELECT COUNT(*) FROM lessons').fetchone()[0]
+
+
+def save_evaluation(report):
+    import json
+    with LOCK,connect() as con:
+        con.execute('CREATE TABLE IF NOT EXISTS evaluations(id INTEGER PRIMARY KEY AUTOINCREMENT, created_at TEXT DEFAULT CURRENT_TIMESTAMP, payload TEXT NOT NULL)')
+        con.execute('INSERT INTO evaluations(payload) VALUES (?)',(json.dumps(report),))
+
+def load_evaluations(limit=10):
+    import json
+    with LOCK,connect() as con:
+        con.execute('CREATE TABLE IF NOT EXISTS evaluations(id INTEGER PRIMARY KEY AUTOINCREMENT, created_at TEXT DEFAULT CURRENT_TIMESTAMP, payload TEXT NOT NULL)')
+        return [dict(json.loads(payload),created_at=created) for created,payload in con.execute('SELECT created_at,payload FROM evaluations ORDER BY id DESC LIMIT ?',(limit,))]

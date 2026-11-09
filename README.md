@@ -1,9 +1,7 @@
-# ZF Lotto Robot V39 — Learn Button (future predictions)
+# ZF Lotto Robot V40 — Learning evaluation
 
-New Learn button analyses which original predictions were correct, which selected numbers were wrong, and which winning numbers were missed. It compares historical feature profiles (20, 60, 150, 300-draw smoothed frequency and gap) of winning vs incorrect selections, then saves small capped weight updates in SQLite.
+Adds **TEST IF LEARNING WORKS**, a chronological, leakage-free comparison of 10 rows from: (1) original fixed V39 formula, (2) sequentially learning model, (3) random baseline. Each historical draw is predicted BEFORE the actual is used to update the learner. Reports show average matches per row, average best row, 3+ and 4+ matches. Every report is saved to SQLite in an `evaluations` table. Previous Predict / Reveal / Learn workflow remains.
 
-When predicting a LATER date, the robot loads only lessons from dates strictly BEFORE that date and applies the learned feature adjustments. The original draw never trains its own prediction. Repeating Learn for the same session is blocked. Ten rows, all eligible numbers, and blind Predict→Reveal retained.
+Default evaluation is 30 draws (up to 100); can take time. Uses locally bundled Main Lotto CSV only, no external requests while predicting or testing. No claim of superior prediction until results are compared. SQLite on Render requires persistent disk via LOTTO_DB_PATH to survive restarts.
 
-**How to test:** Predict an old draw → Reveal → LEARN FROM CORRECT & WRONG NUMBERS → select a later draw → Predict again. The status displays how many saved lessons were applied. Learning from past lottery outcomes cannot reliably beat fair random draws; do not interpret a match as evidence of causation.
-
-Learning is stored in `lotto_history.sqlite3` via `LOTTO_DB_PATH`. Render's ephemeral filesystem loses data on redeploy unless a persistent disk or external database is configured. Existing retrospective V38 endpoint remains for compatibility, but the new Learn button uses `/api/learn`.
+Deployment: extract ZIP to GitHub repository, commit, redeploy Render, Ctrl+F5.
