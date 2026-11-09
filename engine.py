@@ -341,3 +341,39 @@ def walkforward(draws,start=None,end=None,limit=100,era_fn=None):
         counts=[r['rows'][j]['count'] for r in results]
         summary.append({'strategy':'V37 learning row '+str(j+1),'mean_matches':round(sum(counts)/len(counts),3) if counts else None,'three_plus':sum(c>=3 for c in counts),'four_plus':sum(c>=4 for c in counts),'histogram':{str(k):counts.count(k) for k in range(7)}})
     return {'tested':len(results),'summary':summary,'results':results}
+
+
+def feedback_repredict(history, target, previous_rows, actual, iteration=1, ball_max=N):
+    """Retrospective feedback experiment; NOT a blind prediction of target.
+    Update number scores from observed hits/misses and diversify rows.
+    The target result is explicitly consumed; never use this in walkforward.
+    """
+    from itertools import combinations
+    if not actual or len(actual)!=6:raise ValueError('Reveal a verified Main LOTTO result first')
+    baseline=v36_scores(history,ball_max)
+    previous=Counter(n for row in previous_rows for n in row)
+    winners=set(actual)
+    # Reward numbers correctly identified, penalize repeatedly selected misses.
+    # Missing winners get a stronger corrective boost in this hindsight demonstration.
+    feedback={n:(.28 if n in winners and previous[n] else
+                 .48 if n in winners else
+                 -.10*min(previous[n],4)) for n in range(1,ball_max+1)}
+    scores={n:baseline[n]+min(1.4,iteration*.35)*feedback[n] for n in baseline}
+    rng=random.Random(seed_for(target,'v38-feedback',str(iteration)))
+    rows=[];usage=Counter();pair_use=Counter()
+    for row_index in range(10):
+        chosen=[]
+        for pos in range(6):
+            pool=[n for n in range(1,ball_max+1) if n not in chosen]
+            def rank(n):
+                return (scores[n]-.32*usage[n]-.14*sum(pair_use[tuple(sorted((n,x)))] for x in chosen)
+                        +rng.uniform(-.40,.40))
+            chosen.append(max(pool,key=rank))
+        row=sorted(chosen)
+        if row in rows:
+            for _ in range(100):
+                replacement=sorted(rng.sample(range(1,ball_max+1),6))
+                if replacement not in rows:row=replacement;break
+        rows.append(row);usage.update(row)
+        for pair in combinations(row,2):pair_use[pair]+=1
+    return rows
