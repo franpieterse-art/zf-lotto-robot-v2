@@ -262,17 +262,54 @@ def model_cache_value(past,w,n,ball_max):
     eligible=sum(n<=_historical_max(d) for d in window)
     return (hits+36*6/ball_max)/(eligible+36)
 
+def _learned_weights(history,ball_max=N):
+    """Calibrate model weights using only completed draws inside history.
+    The selected target is NEVER used in its own calibration.
+    """
+    windows=(20,60,150,300)
+    pool=range(1,ball_max+1)
+    checkpoints=list(range(max(30,len(history)-96),len(history),4))[-24:]
+    rewards=[0.0]*len(windows)
+    for i in checkpoints:
+        past=history[:i]
+        actual=set(history[i]['numbers'])
+        for j,w in enumerate(windows):
+            ranked=sorted(pool,key=lambda n:(-model_cache_value(past,w,n,ball_max),n))[:6]
+            # Compare with chance expectation, with regularization below.
+            rewards[j]+=len(actual.intersection(ranked))-36/ball_max
+    denom=max(1,len(checkpoints))
+    # Strong shrinkage so random fluctuations don't create extreme weights.
+    raw=[max(.5,min(1.5,1+.18*(r/denom))) for r in rewards]
+    total=sum(raw)
+    return {str(w):round(x/total,5) for w,x in zip(windows,raw)}
+
+def prediction_diagnostics(history,rows,actual,ball_max=N):
+    weights=_learned_weights(history,ball_max)
+    matched=[len(set(row)&set(actual)) for row in rows]
+    covered=set(n for row in rows for n in row)
+    missing=sorted(set(actual)-covered)
+    return {'row_matches':matched,'best_matches':max(matched) if matched else 0,
+            'total_distinct_numbers':len(covered),
+            'actual_numbers_not_covered':missing,
+            'calibration_weights':weights,
+            'message':('The robot compared predictions with the revealed draw. '
+                       'Future historical predictions learn from completed earlier draws '
+                       'using walk-forward calibration. No pattern is assumed to guarantee a win.')}
+
 def predict(history,target,salt='0',ball_max=N):
     if len(history)<12:raise ValueError('At least 12 earlier Main LOTTO draws are required.')
     scores=v36_scores(history,ball_max)
-    pool=list(range(1,ball_max+1));rng=random.Random(seed_for(target,'v36-evidence-diversity',salt))
+    pool=list(range(1,ball_max+1))
+    # Distinct historical dates naturally change the score inputs. The reset
+    # counter creates a new diverse set, not a claim of greater accuracy.
+    rng=random.Random(seed_for(target,'v37-learned-diversity',salt))
     rows=[];usage=Counter();pair_usage=Counter()
     for idx in range(10):
         chosen=[]
         for position in range(6):
             candidates=[n for n in pool if n not in chosen]
             def objective(n):
-                return scores[n]-.50*usage[n]-.32*sum(pair_usage[tuple(sorted((n,x)))] for x in chosen)+rng.uniform(-.13,.13)
+                return scores[n]-.38*usage[n]-.20*sum(pair_usage[tuple(sorted((n,x)))] for x in chosen)+rng.uniform(-.32,.32)
             chosen.append(max(candidates,key=objective))
         row=sorted(chosen)
         if row in rows:
@@ -302,5 +339,5 @@ def walkforward(draws,start=None,end=None,limit=100,era_fn=None):
     summary=[]
     for j in range(10):
         counts=[r['rows'][j]['count'] for r in results]
-        summary.append({'strategy':'V36 adaptive evidence row '+str(j+1),'mean_matches':round(sum(counts)/len(counts),3) if counts else None,'three_plus':sum(c>=3 for c in counts),'four_plus':sum(c>=4 for c in counts),'histogram':{str(k):counts.count(k) for k in range(7)}})
+        summary.append({'strategy':'V37 learning row '+str(j+1),'mean_matches':round(sum(counts)/len(counts),3) if counts else None,'three_plus':sum(c>=3 for c in counts),'four_plus':sum(c>=4 for c in counts),'histogram':{str(k):counts.count(k) for k in range(7)}})
     return {'tested':len(results),'summary':summary,'results':results}

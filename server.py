@@ -3,7 +3,7 @@ from datetime import date, datetime
 from flask import Flask, request, jsonify, send_from_directory
 import requests
 import storage
-from engine import predict, compare, walkforward, v29_scores
+from engine import predict, compare, walkforward, v29_scores, prediction_diagnostics, _learned_weights
 
 app = Flask(__name__, static_folder='.', static_url_path='')
 LOCK = threading.RLock()
@@ -391,8 +391,8 @@ def prediction():
     token=secrets.token_urlsafe(32)
     with LOCK:
         if len(SESSIONS)>1000: SESSIONS.pop(next(iter(SESSIONS)))
-        SESSIONS[token]={'date':day,'rows':rows}
-    return jsonify(token=token,date=day,rows=rows,training_draws=len(history),all_numbers_allowed=True,eligible_numbers=list(range(1,training_era(day)[2]+1)),model_validation={'formula':'V36 adaptive walk-forward evidence weighting and ten-row diversity'},limited_history=len(history)<25)
+        SESSIONS[token]={'date':day,'rows':rows,'training_draws':len(history)}
+    return jsonify(token=token,date=day,rows=rows,training_draws=len(history),all_numbers_allowed=True,eligible_numbers=list(range(1,training_era(day)[2]+1)),model_validation={'formula':'V37 past-only calibrated evidence weighting and ten-row diversity','learned_weights':_learned_weights(history,training_era(day)[2])},limited_history=len(history)<25)
 
 @app.post('/api/reveal')
 def reveal():
@@ -416,7 +416,8 @@ def reveal():
     # Display ONE third panel, preserving the true underlying game identity.
     # Do not relabel 5 MAX results as historical PLUS 2 data.
     third_key = 'plus2' if results['plus2'] is not None else ('max5' if results['max5'] is not None else 'plus2')
-    return jsonify(date=day,actual=results['lotto'],source=SOURCE or 'Historical archive',comparison=comparisons['lotto'],results=results,comparisons=comparisons,plus_errors=errors,bonuses={k:BONUS[k].get(day) for k in results},third_game=third_key)
+    diagnostics=prediction_diagnostics(training_history(day),sess['rows'],results['lotto'],training_era(day)[2]) if results['lotto'] is not None else None
+    return jsonify(date=day,actual=results['lotto'],source=SOURCE or 'Historical archive',comparison=comparisons['lotto'],results=results,comparisons=comparisons,plus_errors=errors,bonuses={k:BONUS[k].get(day) for k in results},third_game=third_key,learning_diagnostics=diagnostics)
 
 
 @app.post('/api/backtest')

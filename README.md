@@ -1,9 +1,4 @@
-# ZF Lotto Robot V36 — Adaptive Evidence + Diversity
-
-10 prediction rows, all eligible numbers, Predict / Reveal / Compare, walk-forward backtesting.
-
-New experimental formula: compare four smoothed frequency windows (20, 60, 150, 300 historical draws) on up to 12 past-only holdouts; mildly adjust their weights based on historical match counts; combine their normalized scores; diversify the 10 rows using number/pair repetition penalties.
-
-**Caution:** A fair lottery draw is independent of earlier results. Calibration is not evidence of predictive power; compare V36 with random rows on unseen historical draws. No external network calls during prediction.
-
-Install: extract, replace GitHub repository files, commit, redeploy Render, refresh Ctrl+F5.
+# ZF Lotto Robot V37 — Learn From Historical Mistakes
+This fixes the misconception that V36's deterministic output was learning from a revealed result. V37 displays error diagnostics after Reveal (best row, missed numbers, number coverage, and learned historical window weights). The model recalibrates using past-only walk-forward validation for each selected date. The target draw is never used to produce its own predictions, even after Reveal. Ten unique rows, all eligible numbers, and Reset generates alternative rows.
+No persistent online model updates are claimed. A fair lottery is independent; learning from past errors does not ensure future prediction accuracy.
+Install: extract files into GitHub repository, commit and redeploy Render, hard refresh.
