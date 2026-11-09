@@ -2,6 +2,7 @@ import csv, io, math, random, hashlib
 from collections import Counter
 from datetime import datetime
 from itertools import combinations
+from ml_engine import logistic_scores,boosted_scores,window_scores
 
 MAX_N=52
 
@@ -39,6 +40,9 @@ def features(history):
 def rank_scores(history,method):
     counts,recent,prev,last,pairs=features(history); n=len(history)
     if method=='random':return {x:0 for x in range(1,53)}
+    if method=='logistic':return logistic_scores(history)
+    if method=='boosted':return boosted_scores(history)
+    if method=='multiwindow':return window_scores(history)
     scores={}
     for x in range(1,53):
         f=counts[x]/max(1,n); m=recent[x]/max(1,min(n,20)); old=prev[x]/max(1,min(max(0,n-20),40)); gap=min(1,(n-1-last[x])/max(1,52/6*2));
@@ -65,7 +69,7 @@ def predict(history,method='weighted',seed=0,rows=5,weights=None):
         while len(selected)<6:
             if method=='random':choice=rng.choice(pool)
             else:
-                vals=[scores[x] for x in pool]; low=min(vals); adjusted=[math.exp(min(20,(v-low)*4))*(0.15 if x in used else 1) for x,v in zip(pool,vals)]
+                vals=[scores[x] for x in pool]; low=min(vals); adjusted=[math.exp(min(20,(v-low)*4))*(0.08 if x in used else 1) for x,v in zip(pool,vals)]
                 choice=rng.choices(pool,weights=adjusted,k=1)[0]
             selected.append(choice);pool.remove(choice)
         ticket=sorted(selected)
@@ -103,7 +107,7 @@ def backtest(history,start_date=None,end_date=None,min_train=40,limit=150):
     indices=[i for i in range(min_train,len(history)) if (not start_date or history[i]['date']>=start_date) and (not end_date or history[i]['date']<=end_date)]
     indices=indices[-limit:]
     if not indices:raise ValueError('No eligible draws in selected date range')
-    methods=['random','weighted','hot','cold','overdue','momentum','adaptive']; stats={m:{'draws':0,'total_best':0,'three_plus':0,'four_plus':0,'five_plus':0} for m in methods}; detail=[]
+    methods=['random','weighted','hot','cold','overdue','momentum','adaptive','multiwindow','logistic','boosted']; stats={m:{'draws':0,'total_best':0,'three_plus':0,'four_plus':0,'five_plus':0} for m in methods}; detail=[]
     # Precompute each prior outcome once, instead of recalculating the same
     # 120-draw training window for every backtest target.
     cached_results={}
@@ -124,4 +128,15 @@ def backtest(history,start_date=None,end_date=None,min_train=40,limit=150):
             for k in ('three_plus','four_plus','five_plus'):s[k]+=result[k]
         detail.append(rec)
     for s in stats.values():s['average_best']=round(s.pop('total_best')/s['draws'],3)
-    return {'stats':stats,'draws':detail,'notice':'All predictions use earlier draws only. Historical success does not imply future advantage.'}
+    return {'stats':stats,'draws':detail,'champion':champion_report(detail,stats),'notice':'All predictions use earlier draws only. Historical success does not imply future advantage.'}
+
+
+def champion_report(detail,stats):
+    # Select champion using the first chronological 70%; report held-out results separately.
+    n=len(detail); cut=max(1,int(n*.7)); methods=list(stats)
+    def rate(method,part):
+        if not part:return None
+        return sum(part[i]['results'][method]['three_plus'] for i in range(len(part)))/len(part)
+    training=detail[:cut];holdout=detail[cut:]
+    winner=max(methods,key=lambda m:(rate(m,training),-methods.index(m)))
+    return {'selected_on':'first 70% of tested dates (chronological)', 'champion':winner,'training_draws':len(training),'holdout_draws':len(holdout),'holdout_three_plus_rate':rate(winner,holdout),'random_holdout_three_plus_rate':rate('random',holdout),'warning':'Small holdout samples are inconclusive. This is not proof of an edge.'}

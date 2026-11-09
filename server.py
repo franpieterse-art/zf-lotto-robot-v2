@@ -22,7 +22,7 @@ def upload():
 @app.post('/api/predict')
 def make_prediction():
     data=request.get_json() or {};date=data.get('date');method=data.get('method','adaptive');h=history()
-    if method not in ('random','weighted','hot','cold','overdue','momentum','adaptive'):return jsonify(error='Invalid method'),400
+    if method not in ('random','weighted','hot','cold','overdue','momentum','adaptive','multiwindow','logistic','boosted'):return jsonify(error='Invalid method'),400
     if not date:return jsonify(error='Choose a date'),400
     prior=[d for d in h if d['date']<date]
     if len(prior)<40:return jsonify(error='Need at least 40 draws before the selected date'),400

@@ -1,19 +1,11 @@
-# ZF Lotto Robot V40 — Walk-forward testing
+# ZF Lotto Robot V42 — Research edition
 
-Run locally: `pip install -r requirements.txt && python server.py`. Open http://localhost:5000.
+Based on V41. Keeps CSV import, date-based Predict → Reveal → Compare, 5 unique lines, and walk-forward backtesting. Adds three engines: multi-window history (10/25/50/100/250/500), dependency-free online logistic regression, and lightweight gradient-boosted decision stumps. Existing adaptive strategy learns weights from earlier historical results only. Five-row selection penalizes overlap. Champion is chosen using the earlier 70% of tested draws; later 30% is held out and compared with random.
 
-Upload historical CSV through the UI (or place `za_lotto.csv` next to `server.py`). CSV rows must have an ISO, DD/MM/YYYY, YYYY/MM/DD or DD-MM-YYYY date and six individual numeric main-number fields. If your CSV has extra numeric fields before the main numbers, normalize it first. Date parsing is day-first for slash dates.
+**Limitations:** A lottery designed to be independent and random is not predictably learnable from past draws. Training performance is not evidence of future performance. Five-row diversity improves coverage, not per-ticket winning odds. This is a research tool, not a guaranteed winning system.
 
-**Predict** hides actual results until **Reveal**. The server recomputes deterministic predictions rather than trusting browser-submitted tickets. **Backtest** compares seven engines over up to 300 dates. Adaptive weights are learned using only earlier results, never the target draw. Five unique lines per engine and date. Learning does not imply statistical predictive power.
+## Deploy safely
+Upload the ZIP contents to GitHub branch `v40-testing`, **not** `main`. Keep your existing `za_lotto.csv` file. On the separate Render test service, build with `pip install -r requirements.txt` and start with `gunicorn server:app --bind 0.0.0.0:$PORT --timeout 120`. The Free instance can be slow; test 3–5 draws first. The program reads CSV from `za_lotto.csv` and an uploaded CSV saved on Render's ephemeral disk may disappear on redeploy; commit your CSV if persistence is needed.
 
-For Render free instances, uploaded CSV data may be lost on redeploy/restart due to ephemeral storage. Commit the CSV to the repository or use persistent storage. This is a standalone V40 prototype; it does not automatically include any features from earlier ZIPs without the source files.
-
-
-## V41 performance repair
-- Historical adaptive learning results are cached within each backtest request; each base engine is evaluated only once per historical draw in the required training window.
-- HTTP error pages now show understandable errors rather than JSON parsing exceptions.
-- Unhandled backtest exceptions are logged and returned as JSON.
-- No future-data leakage: each evaluated draw uses only earlier draws.
-- This is not a claim of improved lottery prediction accuracy.
-
-Deploy to the existing `v40-testing` branch and the separate Render test service only.
+## Test protocol
+Choose a historical date, Predict, then Reveal. Run 3–5 draws initially and then larger batches if performance allows. For meaningful comparisons, use many unseen draws, multiple random seeds and confidence intervals. The champion report is a descriptive holdout check, not statistical proof.
