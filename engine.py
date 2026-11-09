@@ -226,23 +226,54 @@ def v35_scores(history,ball_max=N):
         result[n]=mean/(1+.8*disagreement)
     return result
 
+def v36_scores(history,ball_max=N):
+    """Walk-forward calibrated ensemble. Every calibration target is within history."""
+    pool=range(1,ball_max+1)
+    windows=(20,60,150,300)
+    def model(past,w):
+        occur=Counter(); exposure=Counter()
+        for d in past[-w:]:
+            maximum=_historical_max(d)
+            exposure.update(n for n in pool if n<=maximum)
+            occur.update(n for n in d['numbers'] if n<=ball_max)
+        # Shrink observed frequencies to the null lottery rate.
+        rate={n:(occur[n]+36*6/ball_max)/(exposure[n]+36) for n in pool}
+        return normalized(rate)
+    # Each window is assessed on historical holdouts, strictly after its training data.
+    checkpoints=list(range(max(20,len(history)-72),len(history),6))[-12:]
+    quality=[]
+    for w in windows:
+        gains=[]
+        for i in checkpoints:
+            past=history[:i]; actual=set(history[i]['numbers'])
+            if len(past)<12:continue
+            ranked=sorted(pool,key=lambda n:(-model_cache_value(past,w,n,ball_max),n))[:6]
+            gains.append(len(actual.intersection(ranked))-36/ball_max)
+        avg=sum(gains)/len(gains) if gains else 0
+        # Soft weights, avoiding overreaction to chance fluctuations.
+        quality.append(max(.1,min(2.0,1+.35*avg)))
+    total=sum(quality)
+    signals=[model(history,w) for w in windows]
+    return {n:sum(quality[j]*signals[j][n] for j in range(4))/total for n in pool}
+
+def model_cache_value(past,w,n,ball_max):
+    # Efficient point estimate for calibration ranking; only previous draws.
+    window=past[-w:]; hits=sum(n in d['numbers'] for d in window)
+    eligible=sum(n<=_historical_max(d) for d in window)
+    return (hits+36*6/ball_max)/(eligible+36)
+
 def predict(history,target,salt='0',ball_max=N):
     if len(history)<12:raise ValueError('At least 12 earlier Main LOTTO draws are required.')
-    scores=v35_scores(history,ball_max)
-    pool=list(range(1,ball_max+1));rng=random.Random(seed_for(target,'v35-consensus-diversity',salt))
+    scores=v36_scores(history,ball_max)
+    pool=list(range(1,ball_max+1));rng=random.Random(seed_for(target,'v36-evidence-diversity',salt))
     rows=[];usage=Counter();pair_usage=Counter()
     for idx in range(10):
         chosen=[]
         for position in range(6):
             candidates=[n for n in pool if n not in chosen]
             def objective(n):
-                # Diverse 10-row portfolio, not a promise of improved per-line odds.
-                repetition_penalty=.48*usage[n]
-                pair_penalty=.35*sum(pair_usage[tuple(sorted((n,x)))] for x in chosen)
-                jitter=rng.uniform(-.16,.16)
-                return scores[n]-repetition_penalty-pair_penalty+jitter
-            pick=max(candidates,key=objective)
-            chosen.append(pick)
+                return scores[n]-.50*usage[n]-.32*sum(pair_usage[tuple(sorted((n,x)))] for x in chosen)+rng.uniform(-.13,.13)
+            chosen.append(max(candidates,key=objective))
         row=sorted(chosen)
         if row in rows:
             for _ in range(100):
@@ -271,5 +302,5 @@ def walkforward(draws,start=None,end=None,limit=100,era_fn=None):
     summary=[]
     for j in range(10):
         counts=[r['rows'][j]['count'] for r in results]
-        summary.append({'strategy':'V35 consensus/diversity row '+str(j+1),'mean_matches':round(sum(counts)/len(counts),3) if counts else None,'three_plus':sum(c>=3 for c in counts),'four_plus':sum(c>=4 for c in counts),'histogram':{str(k):counts.count(k) for k in range(7)}})
+        summary.append({'strategy':'V36 adaptive evidence row '+str(j+1),'mean_matches':round(sum(counts)/len(counts),3) if counts else None,'three_plus':sum(c>=3 for c in counts),'four_plus':sum(c>=4 for c in counts),'histogram':{str(k):counts.count(k) for k in range(7)}})
     return {'tested':len(results),'summary':summary,'results':results}
