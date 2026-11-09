@@ -1,7 +1,9 @@
-# ZF Lotto Robot V40 — Learning evaluation
+# ZF Lotto Robot V40 — Walk-forward testing
 
-Adds **TEST IF LEARNING WORKS**, a chronological, leakage-free comparison of 10 rows from: (1) original fixed V39 formula, (2) sequentially learning model, (3) random baseline. Each historical draw is predicted BEFORE the actual is used to update the learner. Reports show average matches per row, average best row, 3+ and 4+ matches. Every report is saved to SQLite in an `evaluations` table. Previous Predict / Reveal / Learn workflow remains.
+Run locally: `pip install -r requirements.txt && python server.py`. Open http://localhost:5000.
 
-Default evaluation is 30 draws (up to 100); can take time. Uses locally bundled Main Lotto CSV only, no external requests while predicting or testing. No claim of superior prediction until results are compared. SQLite on Render requires persistent disk via LOTTO_DB_PATH to survive restarts.
+Upload historical CSV through the UI (or place `za_lotto.csv` next to `server.py`). CSV rows must have an ISO, DD/MM/YYYY, YYYY/MM/DD or DD-MM-YYYY date and six individual numeric main-number fields. If your CSV has extra numeric fields before the main numbers, normalize it first. Date parsing is day-first for slash dates.
 
-Deployment: extract ZIP to GitHub repository, commit, redeploy Render, Ctrl+F5.
+**Predict** hides actual results until **Reveal**. The server recomputes deterministic predictions rather than trusting browser-submitted tickets. **Backtest** compares seven engines over up to 300 dates. Adaptive weights are learned using only earlier results, never the target draw. Five unique lines per engine and date. Learning does not imply statistical predictive power.
+
+For Render free instances, uploaded CSV data may be lost on redeploy/restart due to ephemeral storage. Commit the CSV to the repository or use persistent storage. This is a standalone V40 prototype; it does not automatically include any features from earlier ZIPs without the source files.

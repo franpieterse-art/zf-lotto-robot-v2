@@ -1,12 +1,7 @@
 services:
   - type: web
-    name: zf-lotto-robot
+    name: zf-lotto-v40
     runtime: python
-    plan: free
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn server:app --bind 0.0.0.0:$PORT --timeout 120
-    envVars:
-      - key: PYTHON_VERSION
-        value: 3.12.8
-      - key: LOTTO_CACHE_SECONDS
-        value: 21600
+    startCommand: gunicorn server:app
+    plan: free
