@@ -22,3 +22,21 @@ def save(game,rows,source):
             if old and old[0]!=value:raise ValueError('Conflicting '+game+' draw on '+day+'; existing record preserved')
         con.executemany('INSERT OR IGNORE INTO draws VALUES (?,?,?,?)',[(game,d,','.join(map(str,n)),source) for d,n in rows.items()])
     return len(rows)
+
+
+def save_lesson(day,lesson):
+    import json
+    with LOCK,connect() as con:
+        con.execute('CREATE TABLE IF NOT EXISTS lessons(day TEXT PRIMARY KEY, payload TEXT NOT NULL)')
+        con.execute('INSERT OR REPLACE INTO lessons(day,payload) VALUES (?,?)',(day,json.dumps(lesson)))
+
+def load_lessons(before_day):
+    import json
+    with LOCK,connect() as con:
+        con.execute('CREATE TABLE IF NOT EXISTS lessons(day TEXT PRIMARY KEY, payload TEXT NOT NULL)')
+        return [dict(json.loads(payload),day=day) for day,payload in con.execute('SELECT day,payload FROM lessons WHERE day < ? ORDER BY day',(before_day,))]
+
+def count_lessons():
+    with LOCK,connect() as con:
+        con.execute('CREATE TABLE IF NOT EXISTS lessons(day TEXT PRIMARY KEY, payload TEXT NOT NULL)')
+        return con.execute('SELECT COUNT(*) FROM lessons').fetchone()[0]

@@ -3,7 +3,7 @@ from datetime import date, datetime
 from flask import Flask, request, jsonify, send_from_directory
 import requests
 import storage
-from engine import predict, compare, walkforward, v29_scores, prediction_diagnostics, _learned_weights, feedback_repredict
+from engine import predict, compare, walkforward, v29_scores, prediction_diagnostics, _learned_weights, feedback_repredict, predict_learned, learning_update
 
 app = Flask(__name__, static_folder='.', static_url_path='')
 LOCK = threading.RLock()
@@ -385,14 +385,16 @@ def prediction():
     history=training_history(day)
     if len(history)<12:
         return jsonify(error=f'Only {len(history)} earlier Main LOTTO draws are stored for {day}; 12 are required. Import additional verified earlier results or select a later date. Data coverage is not the same as data completeness.', earlier_draws=len(history),required=12),400
-    try: rows=predict(history,day,str(p.get('reset',0)),ball_max=training_era(day)[2])
+    try:
+        lessons=storage.load_lessons(day)
+        rows,coefficients=predict_learned(history,day,str(p.get('reset',0)),ball_max=training_era(day)[2],lessons=lessons)
     except ValueError as exc:
         return jsonify(error=str(exc)+' Historical archive may be unavailable. Check Data Status.'),400
     token=secrets.token_urlsafe(32)
     with LOCK:
         if len(SESSIONS)>1000: SESSIONS.pop(next(iter(SESSIONS)))
-        SESSIONS[token]={'date':day,'rows':rows,'original_rows':rows,'training_draws':len(history),'iteration':0,'revealed':False}
-    return jsonify(token=token,date=day,rows=rows,training_draws=len(history),all_numbers_allowed=True,eligible_numbers=list(range(1,training_era(day)[2]+1)),model_validation={'formula':'V37 past-only calibrated evidence weighting and ten-row diversity','learned_weights':_learned_weights(history,training_era(day)[2])},limited_history=len(history)<25)
+        SESSIONS[token]={'date':day,'rows':rows,'original_rows':rows,'training_draws':len(history),'iteration':0,'revealed':False,'learned':False}
+    return jsonify(token=token,date=day,rows=rows,training_draws=len(history),all_numbers_allowed=True,eligible_numbers=list(range(1,training_era(day)[2]+1)),model_validation={'formula':'V39 past-only lesson-aware prediction','lessons_applied':len(lessons),'learned_coefficients':coefficients},limited_history=len(history)<25)
 
 @app.post('/api/reveal')
 def reveal():
@@ -421,6 +423,23 @@ def reveal():
     return jsonify(date=day,actual=results['lotto'],source=SOURCE or 'Historical archive',comparison=comparisons['lotto'],results=results,comparisons=comparisons,plus_errors=errors,bonuses={k:BONUS[k].get(day) for k in results},third_game=third_key,learning_diagnostics=diagnostics)
 
 
+
+@app.post('/api/learn')
+def learn_for_future():
+    token=(request.get_json(silent=True) or {}).get('token','')
+    with LOCK: sess=SESSIONS.get(token)
+    if not sess:return jsonify(error='Predict first'),400
+    if not sess.get('revealed'):return jsonify(error='Reveal the actual result before learning'),400
+    day=sess['date']
+    with LOCK:actual=DRAWS.get(day)
+    if actual is None:return jsonify(error='No actual Main LOTTO result stored for this date'),400
+    if sess.get('learned'):return jsonify(error='Already learned from this prediction. Choose a later draw date and Predict again.'),400
+    lesson=learning_update(training_history(day),sess['original_rows'],actual,training_era(day)[2])
+    storage.save_lesson(day,lesson)
+    with LOCK:sess['learned']=True
+    return jsonify(date=day,lesson=lesson,total_saved=storage.count_lessons(),
+                   next_step='Select a LATER historical draw date and click PREDICT 10 ROWS. This lesson is applied only to later dates.',
+                   warning='Winning matches are random outcomes, not proof of predictive causes. The same draw is not used to predict itself.')
 
 @app.post('/api/learn-repredict')
 def learn_repredict():

@@ -296,6 +296,72 @@ def prediction_diagnostics(history,rows,actual,ball_max=N):
                        'Future historical predictions learn from completed earlier draws '
                        'using walk-forward calibration. No pattern is assumed to guarantee a win.')}
 
+def learning_features(history,ball_max):
+    """Explain each number by past-only evidence; same definition at Learn and Predict."""
+    pool=range(1,ball_max+1)
+    windows=(20,60,150,300)
+    feats={}
+    for w in windows:
+        values={n:model_cache_value(history,w,n,ball_max) for n in pool}
+        feats['frequency_'+str(w)]=normalized(values)
+    gap={}
+    for n in pool:
+        last=next((i for i,d in enumerate(reversed(history)) if n in d['numbers']),40)
+        gap[n]=min(last,40)/40
+    feats['gap']=normalized(gap)
+    return {n:{name:values[n] for name,values in feats.items()} for n in pool}
+
+def learning_update(history,rows,actual,ball_max):
+    """Contrast correct vs incorrect selections. Returns small, regularized updates.
+    A hit is not proof of a causal pattern: this is a testable heuristic.
+    """
+    feats=learning_features(history,ball_max)
+    actual=set(actual)
+    selected=set(n for row in rows for n in row)
+    good=sorted(selected&actual);bad=sorted(selected-actual)
+    missed=sorted(actual-selected)
+    update={}
+    for key in next(iter(feats.values())):
+        # Contrast hits with false positives AND misses; do not simply memorize numbers.
+        pos=[feats[n][key] for n in good+missed]
+        neg=[feats[n][key] for n in bad]
+        if not pos or not neg: delta=0.0
+        else:delta=(sum(pos)/len(pos)-sum(neg)/len(neg))*0.15
+        update[key]=round(max(-.06,min(.06,delta)),6)
+    return {'updates':update,'correct_numbers':good,'wrong_selected':bad,'missed_numbers':missed,
+            'correct_count':len(good),'wrong_count':len(bad),
+            'explanation':'Compared feature values of winning numbers against incorrect selections; small regularized adjustments saved for future dates.'}
+
+def predict_learned(history,target,salt='0',ball_max=N,lessons=None):
+    if len(history)<12:raise ValueError('At least 12 earlier Main LOTTO draws are required.')
+    scores=v36_scores(history,ball_max)
+    feats=learning_features(history,ball_max)
+    lessons=lessons or []
+    coefficients={key:0.0 for key in next(iter(feats.values()))}
+    for lesson in lessons:
+        for key,value in lesson.get('updates',{}).items():
+            if key in coefficients: coefficients[key]+=float(value)
+    # Cap learned influence to avoid fitting random fluctuations.
+    coefficients={k:max(-.20,min(.20,v)) for k,v in coefficients.items()}
+    scores={n:scores[n]+sum(coefficients[k]*(feats[n][k]-.5) for k in coefficients) for n in scores}
+    rng=random.Random(seed_for(target,'v39-lesson-aware',str(salt)+'-'+str(len(lessons))))
+    pool=list(range(1,ball_max+1));rows=[];usage=Counter();pairs=Counter()
+    for _ in range(10):
+        chosen=[]
+        for __ in range(6):
+            options=[n for n in pool if n not in chosen]
+            n=max(options,key=lambda n:scores[n]-.38*usage[n]-.20*sum(pairs[tuple(sorted((n,x)))] for x in chosen)+rng.uniform(-.32,.32))
+            chosen.append(n)
+        row=sorted(chosen)
+        if row in rows:
+            for __ in range(100):
+                alt=sorted(rng.sample(pool,6))
+                if alt not in rows:row=alt;break
+        rows.append(row);usage.update(row)
+        for i in range(6):
+            for j in range(i+1,6):pairs[(row[i],row[j])]+=1
+    return rows,coefficients
+
 def predict(history,target,salt='0',ball_max=N):
     if len(history)<12:raise ValueError('At least 12 earlier Main LOTTO draws are required.')
     scores=v36_scores(history,ball_max)
